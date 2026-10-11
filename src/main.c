@@ -25,6 +25,7 @@
 #include "leb128.h"
 #include "wasm_host.h"
 #include "wasm_parser.h"
+#include "wasm_validate.h"
 #include "wasm_vm.h"
 
 #define RUNNER_FILE_MAX (64u * 1024u)
@@ -405,6 +406,16 @@ int main(int argc, char **argv)
     if (dump_mode) {
         return dump_module(g_file_buf, nread, &mod);
     }
+
+    /* Validation is a precondition of the execution pipeline.  Keep
+     * --dump structural-only, while normal execution rejects every invalid
+     * module before host registration, linking, segment writes, or start. */
+    ec = wasm_validate_module(&mod);
+    if (ec != WASM_OK) {
+        fprintf(stderr, "error: validation: %s\n", wasm_err_str(ec));
+        return 1;
+    }
+    printf("[validate] module ok\n");
 
     /* c) Host callbacks. */
     tr = wasm_host_registry_init(&g_reg);

@@ -263,6 +263,8 @@ Standalone `assert`-style suites, no test framework. Current status:
 | Host-provided globals | 16 (`WASM_MAX_HOST_GLOBALS`, `-D` overridable) | `WASM_TRAP_INVALID_ARGUMENT` |
 | Data segments | 32 (`WASM_MAX_DATA_SEGMENTS`, `-D` overridable) | `WASM_ERR_SECTION_OVERFLOW` |
 | br_table labels | 256 (`WASM_MAX_BR_TABLE_LABELS`, `-D` overridable) | `WASM_TRAP_INVALID_ARGUMENT` |
+| Validation value stack | 1024 (`WASM_VALIDATE_STACK_MAX`, `-D` overridable) | `WASM_ERR_SECTION_OVERFLOW` |
+| Validation control depth | 32 (`WASM_MAX_CONTROL_STACK_DEPTH`, shared with execution) | `WASM_ERR_INVALID_BLOCK` |
 
 ## Memory footprint
 

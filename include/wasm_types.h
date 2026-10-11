@@ -41,7 +41,16 @@ typedef enum {
     WASM_ERR_DATA_OUT_OF_BOUNDS, /* data segment needs missing/out-of-range memory */
     WASM_ERR_START_FAILED,       /* start function trapped during instantiation */
     WASM_ERR_ELEMENT_OUT_OF_BOUNDS, /* element segment exceeds the table */
-    WASM_ERR_IMPORTED_TABLES_UNSUPPORTED /* table imports have no host concept */
+    WASM_ERR_IMPORTED_TABLES_UNSUPPORTED, /* table imports have no host concept */
+    /* Static-validation (typing) failures. MALFORMED (encoding/structure)
+     * keeps using the codes above; these six cover TYPING rule violations
+     * found by wasm_validate_module(). */
+    WASM_ERR_INVALID_TYPE,   /* value-stack type error (underflow/mismatch) */
+    WASM_ERR_INVALID_LABEL,  /* branch label out of range */
+    WASM_ERR_INVALID_BLOCK,  /* block structure/nesting/result error */
+    WASM_ERR_INVALID_LOCAL,  /* local index out of range */
+    WASM_ERR_INVALID_GLOBAL, /* global index/mutability error */
+    WASM_ERR_INVALID_ALIGN   /* alignment exceeds the access size */
 } wasm_err_t;
 
 /* Human-readable error name. Zero-alloc: returns string literals. */
@@ -66,6 +75,12 @@ static inline const char *wasm_err_str(wasm_err_t e)
     case WASM_ERR_ELEMENT_OUT_OF_BOUNDS: return "WASM_ERR_ELEMENT_OUT_OF_BOUNDS";
     case WASM_ERR_IMPORTED_TABLES_UNSUPPORTED:
         return "WASM_ERR_IMPORTED_TABLES_UNSUPPORTED";
+    case WASM_ERR_INVALID_TYPE:   return "WASM_ERR_INVALID_TYPE";
+    case WASM_ERR_INVALID_LABEL:  return "WASM_ERR_INVALID_LABEL";
+    case WASM_ERR_INVALID_BLOCK:  return "WASM_ERR_INVALID_BLOCK";
+    case WASM_ERR_INVALID_LOCAL:  return "WASM_ERR_INVALID_LOCAL";
+    case WASM_ERR_INVALID_GLOBAL: return "WASM_ERR_INVALID_GLOBAL";
+    case WASM_ERR_INVALID_ALIGN:  return "WASM_ERR_INVALID_ALIGN";
     default:                       return "WASM_ERR_UNKNOWN";
     }
 }
@@ -154,6 +169,15 @@ typedef struct {
 #endif
 /* Empty table slot marker (no valid function index equals this). */
 #define WASM_TABLE_EMPTY 0xFFFFFFFFu
+
+/* Phase 5 (static validation): abstract value-stack slots for the typing
+ * machine. Default 1024 (matches the execution operand cap, so anything
+ * the validator accepts also fits the interpreter); override with
+ * -DWASM_VALIDATE_STACK_MAX=<n>. Control depth reuses
+ * WASM_MAX_CONTROL_STACK_DEPTH (validation and execution nest alike). */
+#ifndef WASM_VALIDATE_STACK_MAX
+#define WASM_VALIDATE_STACK_MAX 1024u
+#endif
 
 /* Value types supported by WebAssembly MVP (opcode encoding values). */
 typedef enum {
