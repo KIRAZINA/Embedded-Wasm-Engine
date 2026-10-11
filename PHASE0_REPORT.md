@@ -345,5 +345,42 @@ Analysis of `tools/run_spec_suite.py`:
 5. **Trap / Error message verification:** Spec assertions specify exact expected error strings (e.g., `"out of bounds memory access"`, `"integer divide by zero"`). `run_spec_suite.py` only tests process exit code and generic substring `"RESULT trap "`, ignoring the specific trap classification.
 6. **Negative canonical NaN bits:** `nan_bits()` expects canonical float NaN to match exact positive bits `0x7fc00000` (f32) or `0x7ff8000000000000` (f64). The WebAssembly specification allows either sign bit for canonical NaNs (`0xffc00000` is also canonical), which causes false-negative mismatches if the engine preserves a negative sign bit on NaN operations.
 
+## 7. Host-stack & complexity risk audit (task 0.7)
+
+### Validation recursion analysis (`src/wasm_validate.c`)
+
+- **Design:** Nested block validation is **strictly iterative**. Function bodies are traversed in `vfunc_body` using a single flat `while (p < body_end)` instruction loop.
+- **Control tracking:** Block and loop nesting is recorded in a fixed-size control stack array `vctrl_t cs[WASM_MAX_CONTROL_STACK_DEPTH]` embedded directly inside `validator_t`.
+- **Recursion depth:** Host C call stack recursion depth is **0** (no recursion).
+- **Control stack bounds:** When `vopen_block` encounters block/loop/if nesting exceeding `WASM_MAX_CONTROL_STACK_DEPTH` (compile-time constant, default 64), it returns `WASM_ERR_INVALID_BLOCK` immediately. There is no possibility of host C stack exhaustion from deeply nested blocks.
+
+### Branch scan complexity (`vm_scan_block` in `src/wasm_vm.c`)
+
+- **Design:** When executing `br`, `br_if`, or `br_table` to skip to a block's `END`, `src/wasm_vm.c:vm_scan_block` is called to linearly advance the instruction pointer past nested blocks until the matching `END` is located.
+- **Cost vs Step budget:** In `src/wasm_vm.c:wasm_vm_step`, the branch instruction itself decrements `vm->budget` by exactly **1**. Inside `vm_scan_block`, the byte-scanning loop does **not** decrement `vm->budget`.
+- **Worst-case bound:** A single branch to a distant `END` across a 64 KiB function body scans up to 64 KiB in a single VM step. While the total number of bytes scanned per branch is bounded by the function body size (`RUNNER_FILE_MAX` = 64 KiB), the CPU time consumed per VM step is $O(\text{bytecode\_len})$, meaning CPU execution time is decoupled from the virtual instruction step budget.
+
+### Host initialization analysis (`src/wasm_host.c`)
+
+- `eval_init_expr` (`src/wasm_host.c:718`): Evaluates a single initializer instruction (`i32.const`, `i64.const`, `f32.const`, `f64.const`, or imported immutable `global.get`) followed by `0x0B` `end`. Execution is strictly iterative, non-recursive, and $O(1)$.
+- `apply_data` (`src/wasm_host.c:854`): Executes two sequential linear passes over the data section: Pass 1 validates segment headers and memory bounds; Pass 2 performs `memcpy` into linear memory. No recursion. Complexity is strictly linear $O(N)$ with respect to data segment byte size.
+- `apply_elements` (`src/wasm_host.c:968`): Executes two sequential linear passes over the element section: Pass 1 validates offsets and checks that function indices do not dangle; Pass 2 commits function indices into the table array. No recursion. Complexity is strictly linear $O(N)$ with respect to element vector length.
+
+### Deeply nested block test results
+
+- A test module with increasing block nesting depths ($N = 50, 100, 1000, 30000$) was synthesized:
+  - Modules with $N > 64$ nested blocks are rejected cleanly during validation with `WASM_ERR_INVALID_SECTION` / `WASM_ERR_INVALID_BLOCK` without executing instructions.
+  - Modules exceeding `RUNNER_FILE_MAX` (64 KiB, e.g. 30,000 nested blocks) are rejected immediately at the loader stage (`[load] file too large`).
+  - Host call stack usage remained negligible (< 1 KiB) throughout; process execution is completely safe even under constrained host stack limits (e.g. `ulimit -s 1024`). Zero memory corruption, leaks, or segmentation faults occurred.
+
+## 8. Open questions for the curator
+
+1. **Validator opcode coverage in Phase 1+:** The validator currently handles 108 of the 172 canonical MVP opcodes; 64 opcodes (including loads/stores, i64/float comparisons, conversions) fall through to `default:` and reject. Should Phase 1 update the validator to accept all 172 MVP opcodes, or should validator coverage be expanded incrementally in each subsequent phase?
+2. **Missing VM memory opcodes:** 23 load/store opcodes (sub-word loads/stores like `i32.load8_s/u`, float loads/stores `f32.load`, `f64.load`, etc.) are recognized in `mvp_opcodes.csv` but omitted in `wasm_vm.c` dispatch. Will their execution semantics be introduced in an upcoming phase?
+3. **Spec suite execution model:** `tools/run_spec_suite.py` launches a separate `wasm_runner` CLI process per command. Should the spec runner be upgraded to an in-memory/interactive harness to enable testing multi-module suites and mutating state sequences?
+4. **CI strictness:** Should `python tools/opcode_matrix.py --strict` and the zero-dynamic-allocation grep check (`grep -rnE "malloc|calloc|realloc|alloca|strdup" ...`) be added as automated CI jobs in `.github/workflows/ci.yml`?
+5. **Makefile host portability:** `mingw32-make clean` fails on Windows when POSIX `rm` is not in PATH. Should the `clean` target in `Makefile` conditionally use `rmdir /s /q` or `cmd /c del` when running on `Windows_NT`?
+
+
 
 
