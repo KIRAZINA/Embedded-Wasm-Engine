@@ -7,7 +7,9 @@
  * Composition: wasm_vm_t = operand stack (Phase 2) + call stack (frames,
  *   each with its own control stack) + borrowed linear memory + a
  *   host-registered function table for OP_CALL interop + a fixed global
- *   table for OP_GLOBAL_GET/SET (imports first, then defined).
+ *   table for OP_GLOBAL_GET/SET (imports first, then defined) + an
+ *   indirect function table for OP_CALL_INDIRECT + borrowed type bytes
+ *   for signature checks.
  * Everything owned is pre-allocated inside the struct (~103 KiB: declare
  * `static`). Code bytes and memory backing are always borrowed.
  *
@@ -35,7 +37,11 @@ extern "C" {
 /* Callee descriptor for OP_CALL (borrowed code or host callback).
  * WASM-code entries use param/local/return counts + code window.
  * Host entries (is_host != 0) invoke host_cb with param_count args and
- * expect return_count results; code/code_len are ignored. */
+ * expect return_count results; code/code_len are ignored.
+ * Full signatures (for call_indirect checks) live in param_types (only
+ * the first param_count bytes valid) and return_type (0 when resultless);
+ * has_sig == 0 means "counts only" (directly-defined or untyped host
+ * functions), which can never satisfy an indirect signature check. */
 typedef struct {
     uint32_t param_count;
     uint32_t local_count;
@@ -45,6 +51,9 @@ typedef struct {
     int valid;
     int is_host;
     wasm_host_func_t host_cb;
+    uint8_t param_types[WASM_MAX_LOCALS_PER_FRAME];
+    uint8_t return_type;
+    int has_sig;
 } wasm_func_desc_t;
 
 /* Global instance: committed value plus mutability. Index space after
@@ -63,6 +72,10 @@ typedef struct wasm_vm {
     wasm_func_desc_t funcs[WASM_MAX_FUNCTIONS];
     wasm_global_t globals[WASM_MAX_GLOBALS];
     uint32_t nglobals;
+    uint32_t table[WASM_MAX_TABLE_SIZE]; /* func indices or WASM_TABLE_EMPTY */
+    uint32_t table_size;                 /* declared length (segments bound it) */
+    const uint8_t *typesec;              /* borrowed type section (or NULL) */
+    size_t typesec_len;
 } wasm_vm_t;
 
 wasm_trap_t wasm_vm_init(wasm_vm_t *vm);

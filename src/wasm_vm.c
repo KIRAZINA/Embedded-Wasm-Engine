@@ -28,9 +28,15 @@ wasm_trap_t wasm_vm_init(wasm_vm_t *vm)
     }
     vm->mem = NULL;
     for (i = 0u; i < (uint32_t)WASM_MAX_FUNCTIONS; i++) {
+        uint32_t k;
         vm->funcs[i].valid = 0;
         vm->funcs[i].is_host = 0;
         vm->funcs[i].host_cb = NULL;
+        for (k = 0u; k < (uint32_t)WASM_MAX_LOCALS_PER_FRAME; k++) {
+            vm->funcs[i].param_types[k] = 0u;
+        }
+        vm->funcs[i].return_type = 0u;
+        vm->funcs[i].has_sig = 0;
     }
     for (i = 0u; i < (uint32_t)WASM_MAX_GLOBALS; i++) {
         vm->globals[i].value.type = WASM_TYPE_I32;
@@ -39,6 +45,12 @@ wasm_trap_t wasm_vm_init(wasm_vm_t *vm)
         vm->globals[i].valid = 0;
     }
     vm->nglobals = 0u;
+    for (i = 0u; i < (uint32_t)WASM_MAX_TABLE_SIZE; i++) {
+        vm->table[i] = (uint32_t)WASM_TABLE_EMPTY;
+    }
+    vm->table_size = 0u;
+    vm->typesec = NULL;
+    vm->typesec_len = 0u;
     return WASM_TRAP_OK;
 }
 
@@ -774,6 +786,7 @@ static wasm_trap_t vm_scan_block(const uint8_t *from, const uint8_t *end,
         case OP_GLOBAL_GET:
         case OP_GLOBAL_SET:
         case OP_CALL:
+        case OP_CALL_INDIRECT:
         case OP_BR:
         case OP_BR_IF:
             tr = vm_skip_u32(&p, end);
@@ -979,6 +992,152 @@ static wasm_trap_t vm_do_branch(wasm_vm_t *vm, wasm_frame_t *f, uint32_t label)
         cs->depth = depth - label - 1u; /* drop target and everything above */
     }
     return WASM_TRAP_OK;
+}
+
+/* Invoke a host callee: pop args (last first), call, push results. */
+static wasm_trap_t vm_invoke_host(wasm_vm_t *vm, const wasm_func_desc_t *d)
+{
+    wasm_val_t argv[WASM_MAX_LOCALS_PER_FRAME];
+    wasm_val_t retv[1];
+    uint32_t i;
+    wasm_trap_t tr;
+    if (d->host_cb == NULL) {
+        return WASM_TRAP_INVALID_ARGUMENT;
+    }
+    if (d->param_count > (uint32_t)WASM_MAX_LOCALS_PER_FRAME ||
+        d->return_count > 1u) {
+        return WASM_TRAP_INVALID_ARGUMENT;
+    }
+    if (wasm_stack_depth(&vm->operands) < d->param_count) {
+        return WASM_TRAP_STACK_UNDERFLOW;
+    }
+    for (i = 0u; i < d->param_count; i++) {
+        tr = wasm_stack_pop(&vm->operands, &argv[d->param_count - 1u - i]);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+    }
+    retv[0].type = WASM_TYPE_I32;
+    retv[0].value.i32 = 0;
+    tr = d->host_cb(vm, argv, d->param_count, retv, d->return_count);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    for (i = 0u; i < d->return_count; i++) {
+        tr = wasm_stack_push(&vm->operands, retv[i]);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+    }
+    return WASM_TRAP_OK;
+}
+
+/* Enter a WASM-code callee: new frame plus borrowed code window. */
+static wasm_trap_t vm_enter_callee(wasm_vm_t *vm, uint32_t idx,
+                                   const wasm_func_desc_t *d)
+{
+    wasm_trap_t tr = wasm_vm_enter_function(vm, idx, d->param_count,
+                                            d->local_count,
+                                            d->return_count);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    return wasm_vm_attach_code(vm, d->code, d->code_len);
+}
+
+/*
+ * Verify a call_indirect target against the type-section entry `typeidx:
+ * param AND return counts plus every value type must be equal. Targets
+ * without recorded signatures (directly-defined or untyped host funcs)
+ * and missing/unparseable type bytes fail closed with a mismatch.
+ */
+static wasm_trap_t vm_check_indirect_sig(wasm_vm_t *vm,
+                                         const wasm_func_desc_t *d,
+                                         uint32_t typeidx)
+{
+    const uint8_t *p, *end;
+    uint32_t count, t, npc, nrc, k;
+    if (!d->has_sig) {
+        return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+    }
+    if (vm->typesec == NULL || vm->typesec_len == 0u) {
+        return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+    }
+    p = vm->typesec;
+    end = vm->typesec + vm->typesec_len;
+    if (leb128_decode_u32(&p, end, &count) != WASM_OK || typeidx >= count) {
+        return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+    }
+    for (t = 0u; t <= typeidx; t++) {
+        uint8_t tag;
+        if ((uint64_t)(size_t)(end - p) < 1u) {
+            return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+        }
+        tag = *p++;
+        if (tag != 0x60u) {
+            return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+        }
+        if (leb128_decode_u32(&p, end, &npc) != WASM_OK) {
+            return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+        }
+        if (t == typeidx) {
+            if (npc != d->param_count) {
+                return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+            }
+            if (npc > (uint32_t)WASM_MAX_LOCALS_PER_FRAME) {
+                return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+            }
+            for (k = 0u; k < npc; k++) {
+                uint8_t vt;
+                if ((uint64_t)(size_t)(end - p) < 1u) {
+                    return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+                }
+                vt = *p++;
+                if (vt != d->param_types[k]) {
+                    return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+                }
+            }
+        } else {
+            uint32_t j;
+            for (j = 0u; j < npc; j++) {
+                if ((uint64_t)(size_t)(end - p) < 1u) {
+                    return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+                }
+                p++;
+            }
+        }
+        if (leb128_decode_u32(&p, end, &nrc) != WASM_OK) {
+            return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+        }
+        if (t == typeidx) {
+            uint8_t vt;
+            if (nrc != d->return_count) {
+                return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+            }
+            if (nrc > 1u) {
+                return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+            }
+            if (nrc == 1u) {
+                if ((uint64_t)(size_t)(end - p) < 1u) {
+                    return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+                }
+                vt = *p++;
+                if (vt != d->return_type) {
+                    return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+                }
+            }
+            return WASM_TRAP_OK;
+        } else {
+            uint32_t j;
+            for (j = 0u; j < nrc; j++) {
+                if ((uint64_t)(size_t)(end - p) < 1u) {
+                    return WASM_TRAP_INDIRECT_TYPE_MISMATCH;
+                }
+                p++;
+            }
+        }
+    }
+    return WASM_TRAP_INDIRECT_TYPE_MISMATCH; /* unreachable */
 }
 
 wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
@@ -1227,46 +1386,49 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
             return WASM_TRAP_INVALID_ARGUMENT;
         }
         if (d->is_host) {
-            /* Native callback: pop args (last first), invoke, push results. */
-            wasm_val_t argv[WASM_MAX_LOCALS_PER_FRAME];
-            wasm_val_t retv[1];
-            uint32_t i;
-            if (d->host_cb == NULL) {
-                return WASM_TRAP_INVALID_ARGUMENT;
-            }
-            if (d->param_count > (uint32_t)WASM_MAX_LOCALS_PER_FRAME ||
-                d->return_count > 1u) {
-                return WASM_TRAP_INVALID_ARGUMENT;
-            }
-            if (wasm_stack_depth(&vm->operands) < d->param_count) {
-                return WASM_TRAP_STACK_UNDERFLOW;
-            }
-            for (i = 0u; i < d->param_count; i++) {
-                tr = wasm_stack_pop(&vm->operands, &argv[d->param_count - 1u - i]);
-                if (tr != WASM_TRAP_OK) {
-                    return tr;
-                }
-            }
-            retv[0].type = WASM_TYPE_I32;
-            retv[0].value.i32 = 0;
-            tr = d->host_cb(vm, argv, d->param_count, retv, d->return_count);
-            if (tr != WASM_TRAP_OK) {
-                return tr;
-            }
-            for (i = 0u; i < d->return_count; i++) {
-                tr = wasm_stack_push(&vm->operands, retv[i]);
-                if (tr != WASM_TRAP_OK) {
-                    return tr;
-                }
-            }
-            return WASM_TRAP_OK;
+            return vm_invoke_host(vm, d);
         }
-        tr = wasm_vm_enter_function(vm, idx, d->param_count, d->local_count,
-                                    d->return_count);
+        return vm_enter_callee(vm, idx, d);
+    }
+
+    case OP_CALL_INDIRECT: {
+        /* [typeidx]: pop index, bounds-check the table, resolve the slot,
+         * verify the signature element-by-element, then call like OP_CALL.
+         * The signature check precedes argument popping (fail closed). */
+        uint32_t typeidx = 0u;
+        uint32_t index;
+        uint32_t slot;
+        const wasm_func_desc_t *d;
+        wasm_val_t cv;
+        tr = vm_decode_u32_imm(f, &typeidx);
         if (tr != WASM_TRAP_OK) {
             return tr;
         }
-        return wasm_vm_attach_code(vm, d->code, d->code_len);
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &cv);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        index = (uint32_t)cv.value.i32;
+        if (index >= vm->table_size) {
+            return WASM_TRAP_TABLE_OUT_OF_BOUNDS;
+        }
+        slot = vm->table[index];
+        if (slot == (uint32_t)WASM_TABLE_EMPTY ||
+            slot >= (uint32_t)WASM_MAX_FUNCTIONS) {
+            return WASM_TRAP_UNDEFINED_ELEMENT;
+        }
+        d = &vm->funcs[slot];
+        if (!d->valid) {
+            return WASM_TRAP_UNDEFINED_ELEMENT;
+        }
+        tr = vm_check_indirect_sig(vm, d, typeidx);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (d->is_host) {
+            return vm_invoke_host(vm, d);
+        }
+        return vm_enter_callee(vm, slot, d);
     }
 
     case OP_I32_CONST: {
@@ -2206,6 +2368,14 @@ wasm_trap_t wasm_vm_define_function(wasm_vm_t *vm, uint32_t func_idx,
     vm->funcs[func_idx].valid = 1;
     vm->funcs[func_idx].is_host = 0;
     vm->funcs[func_idx].host_cb = NULL;
+    {
+        uint32_t k;
+        for (k = 0u; k < (uint32_t)WASM_MAX_LOCALS_PER_FRAME; k++) {
+            vm->funcs[func_idx].param_types[k] = 0u;
+        }
+    }
+    vm->funcs[func_idx].return_type = 0u;
+    vm->funcs[func_idx].has_sig = 0; /* counts only: no indirect sig check */
     return WASM_TRAP_OK;
 }
 
@@ -2231,5 +2401,13 @@ wasm_trap_t wasm_vm_define_host_function(wasm_vm_t *vm, uint32_t func_idx,
     vm->funcs[func_idx].valid = 1;
     vm->funcs[func_idx].is_host = 1;
     vm->funcs[func_idx].host_cb = cb;
+    {
+        uint32_t k;
+        for (k = 0u; k < (uint32_t)WASM_MAX_LOCALS_PER_FRAME; k++) {
+            vm->funcs[func_idx].param_types[k] = 0u;
+        }
+    }
+    vm->funcs[func_idx].return_type = 0u;
+    vm->funcs[func_idx].has_sig = 0; /* counts only: no indirect sig check */
     return WASM_TRAP_OK;
 }

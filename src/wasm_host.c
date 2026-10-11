@@ -29,12 +29,18 @@ wasm_trap_t wasm_host_registry_init(wasm_host_registry_t *r)
         return WASM_TRAP_NULL;
     }
     for (i = 0u; i < (uint32_t)WASM_MAX_HOST_FUNCS; i++) {
+        uint32_t k;
         r->entries[i].module[0] = '\0';
         r->entries[i].name[0] = '\0';
         r->entries[i].param_count = 0u;
         r->entries[i].return_count = 0u;
         r->entries[i].func = NULL;
         r->entries[i].used = 0;
+        for (k = 0u; k < (uint32_t)WASM_MAX_LOCALS_PER_FRAME; k++) {
+            r->entries[i].param_types[k] = 0u;
+        }
+        r->entries[i].return_type = 0u;
+        r->entries[i].has_types = 0;
     }
     for (i = 0u; i < (uint32_t)WASM_MAX_HOST_GLOBALS; i++) {
         r->globals[i].module[0] = '\0';
@@ -69,12 +75,18 @@ wasm_trap_t wasm_host_register_func(wasm_host_registry_t *r,
     }
     for (i = 0u; i < (uint32_t)WASM_MAX_HOST_FUNCS; i++) {
         if (!r->entries[i].used) {
+            uint32_t k;
             memcpy(r->entries[i].module, module, ml + 1u);
             memcpy(r->entries[i].name, name, nl + 1u);
             r->entries[i].param_count = param_count;
             r->entries[i].return_count = return_count;
             r->entries[i].func = func;
             r->entries[i].used = 1;
+            for (k = 0u; k < (uint32_t)WASM_MAX_LOCALS_PER_FRAME; k++) {
+                r->entries[i].param_types[k] = 0u;
+            }
+            r->entries[i].return_type = 0u;
+            r->entries[i].has_types = 0; /* counts only */
             return WASM_TRAP_OK;
         }
     }
@@ -85,6 +97,66 @@ static int host_valtype_ok(wasm_valtype_t t)
 {
     return t == WASM_TYPE_I32 || t == WASM_TYPE_I64 ||
            t == WASM_TYPE_F32 || t == WASM_TYPE_F64;
+}
+
+static int host_valtype_ok(wasm_valtype_t t);
+
+wasm_trap_t wasm_host_register_func_typed(wasm_host_registry_t *r,
+                                          const char *module, const char *name,
+                                          const wasm_valtype_t *param_types,
+                                          uint32_t param_count,
+                                          const wasm_valtype_t *ret_types,
+                                          uint32_t return_count,
+                                          wasm_host_func_t func)
+{
+    uint32_t i, k;
+    size_t ml, nl;
+    if (r == NULL || module == NULL || name == NULL || func == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    if (param_count > (uint32_t)WASM_MAX_LOCALS_PER_FRAME ||
+        return_count > 1u) {
+        return WASM_TRAP_INVALID_ARGUMENT;
+    }
+    if ((param_count > 0u && param_types == NULL) ||
+        (return_count > 0u && ret_types == NULL)) {
+        return WASM_TRAP_NULL;
+    }
+    for (k = 0u; k < param_count; k++) {
+        if (!host_valtype_ok(param_types[k])) {
+            return WASM_TRAP_INVALID_ARGUMENT;
+        }
+    }
+    for (k = 0u; k < return_count; k++) {
+        if (!host_valtype_ok(ret_types[k])) {
+            return WASM_TRAP_INVALID_ARGUMENT;
+        }
+    }
+    ml = strlen(module);
+    nl = strlen(name);
+    if (ml == 0u || nl == 0u ||
+        ml >= (size_t)WASM_HOST_NAME_MAX || nl >= (size_t)WASM_HOST_NAME_MAX) {
+        return WASM_TRAP_INVALID_ARGUMENT;
+    }
+    for (i = 0u; i < (uint32_t)WASM_MAX_HOST_FUNCS; i++) {
+        if (!r->entries[i].used) {
+            memcpy(r->entries[i].module, module, ml + 1u);
+            memcpy(r->entries[i].name, name, nl + 1u);
+            r->entries[i].param_count = param_count;
+            r->entries[i].return_count = return_count;
+            r->entries[i].func = func;
+            r->entries[i].used = 1;
+            for (k = 0u; k < (uint32_t)WASM_MAX_LOCALS_PER_FRAME; k++) {
+                r->entries[i].param_types[k] =
+                    (k < param_count) ? (uint8_t)param_types[k] : 0u;
+            }
+            r->entries[i].return_type =
+                (return_count > 0u) ? (uint8_t)ret_types[0] : 0u;
+            r->entries[i].has_types = 1;
+            return WASM_TRAP_OK;
+        }
+    }
+    return WASM_TRAP_INVALID_ARGUMENT; /* table full */
 }
 
 wasm_trap_t wasm_host_register_global(wasm_host_registry_t *r,
@@ -242,9 +314,75 @@ static wasm_err_t skip_limits(const uint8_t **pp, const uint8_t *end)
     return WASM_OK;
 }
 
-/* Decode functype #typeidx from a type-section payload into counts. */
+static int global_valtype_ok(uint8_t vt);
+
+/* Validate every type entry in one pass (tag, counts, valtype bytes,
+ * no trailing bytes). call_indirect parses these bytes at runtime, so a
+ * malformed entry must fail at link time, not mid-execution. */
+static wasm_err_t validate_types(const wasm_slice_t *typep)
+{
+    const uint8_t *cur, *end;
+    uint32_t count, t;
+    wasm_err_t rc;
+    cur = typep->data;
+    end = typep->data + typep->len;
+    rc = leb128_decode_u32(&cur, end, &count);
+    if (rc != WASM_OK) {
+        return rc;
+    }
+    for (t = 0u; t < count; t++) {
+        uint32_t pc, rcnt, k;
+        uint8_t tag;
+        if (!readable(cur, end, 1u)) {
+            return WASM_ERR_TRUNCATED;
+        }
+        tag = *cur++;
+        if (tag != WASM_TAG_FCTYPE) {
+            return WASM_ERR_INVALID_SECTION;
+        }
+        rc = leb128_decode_u32(&cur, end, &pc);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        for (k = 0u; k < pc; k++) {
+            uint8_t vt;
+            if (!readable(cur, end, 1u)) {
+                return WASM_ERR_TRUNCATED;
+            }
+            vt = *cur++;
+            if (!global_valtype_ok(vt)) {
+                return WASM_ERR_INVALID_SECTION;
+            }
+        }
+        rc = leb128_decode_u32(&cur, end, &rcnt);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        for (k = 0u; k < rcnt; k++) {
+            uint8_t vt;
+            if (!readable(cur, end, 1u)) {
+                return WASM_ERR_TRUNCATED;
+            }
+            vt = *cur++;
+            if (!global_valtype_ok(vt)) {
+                return WASM_ERR_INVALID_SECTION;
+            }
+        }
+    }
+    if (cur != end) {
+        return WASM_ERR_INVALID_SECTION; /* trailing bytes */
+    }
+    return WASM_OK;
+}
+/* Decode functype #typeidx from a type-section payload into counts, and
+ * optionally (non-NULL outs) the full signature: the first
+ * min(pc, ptypes_cap) param bytes and the single result byte. Counts are
+ * always exact; stored bytes are exact whenever pc <= cap / rcnt <= 1. */
 static wasm_err_t parse_functype(const wasm_slice_t *typep, uint32_t typeidx,
-                                 uint32_t *out_pc, uint32_t *out_rc)
+                                 uint32_t *out_pc, uint32_t *out_rc,
+                                 uint8_t *out_ptypes_or_null,
+                                 uint32_t ptypes_cap,
+                                 uint8_t *out_rtype_or_null)
 {
     const uint8_t *cur, *end;
     uint32_t count, t;
@@ -283,6 +421,10 @@ static wasm_err_t parse_functype(const wasm_slice_t *typep, uint32_t typeidx,
                 vt != (uint8_t)WASM_TYPE_F32 && vt != (uint8_t)WASM_TYPE_F64) {
                 return WASM_ERR_INVALID_SECTION;
             }
+            if (t == typeidx && out_ptypes_or_null != NULL &&
+                k < ptypes_cap) {
+                out_ptypes_or_null[k] = vt;
+            }
         }
         rc = leb128_decode_u32(&cur, end, &rcnt);
         if (rc != WASM_OK) {
@@ -297,6 +439,9 @@ static wasm_err_t parse_functype(const wasm_slice_t *typep, uint32_t typeidx,
             if (vt != (uint8_t)WASM_TYPE_I32 && vt != (uint8_t)WASM_TYPE_I64 &&
                 vt != (uint8_t)WASM_TYPE_F32 && vt != (uint8_t)WASM_TYPE_F64) {
                 return WASM_ERR_INVALID_SECTION;
+            }
+            if (t == typeidx && out_rtype_or_null != NULL && k == 0u) {
+                *out_rtype_or_null = vt;
             }
         }
         if (t == typeidx) {
@@ -377,7 +522,8 @@ wasm_err_t wasm_bind_imports(const wasm_slice_t *import_payload,
                 return WASM_ERR_UNRESOLVED_IMPORT;
             }
             if (check_types) {
-                rc = parse_functype(type_payload, typeidx, &pc, &rcnt);
+                rc = parse_functype(type_payload, typeidx, &pc, &rcnt,
+                                    NULL, 0u, NULL);
                 if (rc != WASM_OK) {
                     return rc;
                 }
@@ -391,15 +537,8 @@ wasm_err_t wasm_bind_imports(const wasm_slice_t *import_payload,
             }
             out_reg_idx[nfuncs++] = (uint32_t)slot;
         } else if (kind == 0x01u) {
-            /* table: reftype + limits */
-            if (!readable(cur, end, 1u)) {
-                return WASM_ERR_TRUNCATED;
-            }
-            cur++;
-            rc = skip_limits(&cur, end);
-            if (rc != WASM_OK) {
-                return rc;
-            }
+            /* tables: the host has no table concept (deliberate MVP cut). */
+            return WASM_ERR_IMPORTED_TABLES_UNSUPPORTED;
         } else if (kind == 0x02u) {
             /* memory: limits */
             rc = skip_limits(&cur, end);
@@ -479,15 +618,8 @@ wasm_err_t wasm_bind_global_imports(const wasm_slice_t *import_payload,
             }
             (void)ignored;
         } else if (kind == 0x01u) {
-            /* table: reftype + limits */
-            if (!readable(cur, end, 1u)) {
-                return WASM_ERR_TRUNCATED;
-            }
-            cur++;
-            rc = skip_limits(&cur, end);
-            if (rc != WASM_OK) {
-                return rc;
-            }
+            /* tables: the host has no table concept (deliberate MVP cut). */
+            return WASM_ERR_IMPORTED_TABLES_UNSUPPORTED;
         } else if (kind == 0x02u) {
             /* memory: limits */
             rc = skip_limits(&cur, end);
@@ -777,6 +909,122 @@ static wasm_err_t apply_data(wasm_vm_t *vm, const wasm_slice_t *datap,
     return WASM_OK;
 }
 
+/* Parse one element segment header: tableidx==0, i32 offset expr, length.
+ * The funcidx vector is NOT consumed here; callers walk it themselves
+ * (pass 1 validates, pass 2 writes). */
+static wasm_err_t parse_elem_seg(const uint8_t **pp, const uint8_t *end,
+                                 const wasm_vm_t *vm, uint32_t nimportglobals,
+                                 uint32_t *out_offset, uint32_t *out_len)
+{
+    uint32_t tableidx = 0u, len = 0u;
+    wasm_val_t off;
+    wasm_err_t rc;
+    off.type = WASM_TYPE_I32;
+    off.value.i32 = 0;
+    rc = leb128_decode_u32(pp, end, &tableidx);
+    if (rc != WASM_OK) {
+        return rc;
+    }
+    if (tableidx != 0u) {
+        return WASM_ERR_INVALID_SECTION; /* MVP has exactly one table */
+    }
+    rc = eval_init_expr(pp, end, vm->globals, nimportglobals, &off);
+    if (rc != WASM_OK) {
+        return rc;
+    }
+    if (off.type != WASM_TYPE_I32) {
+        return WASM_ERR_INVALID_SECTION; /* offset must evaluate to i32 */
+    }
+    rc = leb128_decode_u32(pp, end, &len);
+    if (rc != WASM_OK) {
+        return rc;
+    }
+    *out_offset = (uint32_t)off.value.i32;
+    *out_len = len;
+    return WASM_OK;
+}
+
+/* Table-bounds check for [offset, offset+len): 64-bit subtraction form,
+ * so wraparound (e.g. offset 0xFFFFFFFF) can never slip through. */
+static wasm_err_t check_elem_bounds(uint32_t size, uint32_t offset,
+                                    uint32_t len)
+{
+    uint64_t total = (uint64_t)size;
+    uint64_t room;
+    if ((uint64_t)len > total) {
+        return WASM_ERR_ELEMENT_OUT_OF_BOUNDS;
+    }
+    room = total - (uint64_t)len;
+    if ((uint64_t)offset > room) {
+        return WASM_ERR_ELEMENT_OUT_OF_BOUNDS;
+    }
+    return WASM_OK;
+}
+
+/*
+ * Apply element segments (two passes like data: validate every segment —
+ * bounds plus dangling funcidx — first, write only after all pass).
+ */
+static wasm_err_t apply_elements(wasm_vm_t *vm, const wasm_slice_t *elemp,
+                                 uint32_t nimportglobals, uint32_t nfuncs)
+{
+    const uint8_t *cur, *end;
+    uint32_t count, i;
+    wasm_err_t rc;
+    cur = elemp->data;
+    end = elemp->data + elemp->len;
+    rc = leb128_decode_u32(&cur, end, &count);
+    if (rc != WASM_OK) {
+        return rc;
+    }
+    for (i = 0u; i < count; i++) {
+        uint32_t offset = 0u, len = 0u, k;
+        rc = parse_elem_seg(&cur, end, vm, nimportglobals, &offset, &len);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        rc = check_elem_bounds(vm->table_size, offset, len);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        for (k = 0u; k < len; k++) {
+            uint32_t fidx = 0u;
+            rc = leb128_decode_u32(&cur, end, &fidx);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            if (fidx >= nfuncs) {
+                return WASM_ERR_INVALID_SECTION; /* dangling reference */
+            }
+        }
+    }
+    if (cur != end) {
+        return WASM_ERR_INVALID_SECTION; /* trailing bytes */
+    }
+    /* Pass 2: re-walk (deterministic) and commit in section order. */
+    cur = elemp->data;
+    rc = leb128_decode_u32(&cur, end, &count);
+    if (rc != WASM_OK) {
+        return rc; /* unreachable: pass 1 accepted */
+    }
+    for (i = 0u; i < count; i++) {
+        uint32_t offset = 0u, len = 0u, k;
+        rc = parse_elem_seg(&cur, end, vm, nimportglobals, &offset, &len);
+        if (rc != WASM_OK) {
+            return rc; /* unreachable: pass 1 accepted */
+        }
+        for (k = 0u; k < len; k++) {
+            uint32_t fidx = 0u;
+            rc = leb128_decode_u32(&cur, end, &fidx);
+            if (rc != WASM_OK) {
+                return rc; /* unreachable: pass 1 accepted */
+            }
+            vm->table[offset + k] = fidx;
+        }
+    }
+    return WASM_OK;
+}
+
 /*
  * Run the start function ([]->[] only). Defined functions execute via
  * enter/attach/run; host imports are invoked directly. Any failure aborts
@@ -837,7 +1085,9 @@ wasm_err_t wasm_instantiate(wasm_vm_t *vm, const wasm_module_t *mod,
                             uint32_t *out_nfuncs)
 {
     wasm_slice_t typep, impp, funcp, codep, globp, datap, startp;
+    wasm_slice_t tablep, elemp;
     int has_type, has_imp, has_func, has_code, has_glob, has_data, has_start;
+    int has_table, has_elem;
     wasm_err_t rc;
     uint32_t regmap[WASM_MAX_FUNCTIONS];
     uint32_t gregmap[WASM_MAX_GLOBALS];
@@ -877,6 +1127,35 @@ wasm_err_t wasm_instantiate(wasm_vm_t *vm, const wasm_module_t *mod,
     if (rc != WASM_OK) {
         return rc;
     }
+    rc = opt_section(mod, WASM_SECT_TABLE, &tablep, &has_table);
+    if (rc != WASM_OK) {
+        return rc;
+    }
+    rc = opt_section(mod, WASM_SECT_ELEMENT, &elemp, &has_elem);
+    if (rc != WASM_OK) {
+        return rc;
+    }
+
+    /* Reset reuse-sensitive state up front (partial failure below means
+     * re-init before reuse, per the header contract). */
+    vm->nglobals = 0u;
+    for (i = 0u; i < (uint32_t)WASM_MAX_TABLE_SIZE; i++) {
+        vm->table[i] = (uint32_t)WASM_TABLE_EMPTY;
+    }
+    vm->table_size = 0u;
+    vm->typesec = NULL;
+    vm->typesec_len = 0u;
+
+    /* 0. Validate every type entry (call_indirect parses them at runtime)
+     * and retain the bytes (borrowed, like code windows). */
+    if (has_type) {
+        rc = validate_types(&typep);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        vm->typesec = typep.data;
+        vm->typesec_len = typep.len;
+    }
 
     /* 1. Function imports -> host slots. */
     if (has_imp) {
@@ -903,6 +1182,55 @@ wasm_err_t wasm_instantiate(wasm_vm_t *vm, const wasm_module_t *mod,
             vm->globals[i].valid = 1;
         }
         vm->nglobals = nimportglobals;
+    }
+
+    /* 1c. Table section: MVP allows exactly one table of funcref. */
+    if (has_table) {
+        uint32_t count, flags, min, maxv = 0u;
+        uint8_t elemtype;
+        cur = tablep.data;
+        end = tablep.data + tablep.len;
+        rc = leb128_decode_u32(&cur, end, &count);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        if (count != 1u) {
+            return WASM_ERR_INVALID_SECTION; /* exactly one table */
+        }
+        if (!readable(cur, end, 1u)) {
+            return WASM_ERR_TRUNCATED;
+        }
+        elemtype = *cur++;
+        if (elemtype != 0x70u) {
+            return WASM_ERR_INVALID_SECTION; /* funcref only */
+        }
+        rc = leb128_decode_u32(&cur, end, &flags);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        if (flags > 1u) {
+            return WASM_ERR_INVALID_SECTION;
+        }
+        rc = leb128_decode_u32(&cur, end, &min);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        if (min > (uint32_t)WASM_MAX_TABLE_SIZE) {
+            return WASM_ERR_SECTION_OVERFLOW;
+        }
+        if (flags & 1u) {
+            rc = leb128_decode_u32(&cur, end, &maxv);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            if (maxv < min) {
+                return WASM_ERR_INVALID_SECTION;
+            }
+        }
+        if (cur != end) {
+            return WASM_ERR_INVALID_SECTION; /* trailing bytes */
+        }
+        vm->table_size = min;
     }
 
     /* 2. Declared (WASM-code) functions: type index per function. */
@@ -960,6 +1288,9 @@ wasm_err_t wasm_instantiate(wasm_vm_t *vm, const wasm_module_t *mod,
             size_t code_len;
             uint64_t locals_total = 0u;
             uint32_t pc = 0u, rcnt = 0u;
+            uint8_t ptypes[WASM_MAX_LOCALS_PER_FRAME];
+            uint8_t rtype = 0u;
+            uint32_t q;
             wasm_trap_t tr;
             rc = leb128_decode_u32(&cur, end, &body_size);
             if (rc != WASM_OK) {
@@ -1000,7 +1331,8 @@ wasm_err_t wasm_instantiate(wasm_vm_t *vm, const wasm_module_t *mod,
             if (!has_type) {
                 return WASM_ERR_INVALID_SECTION; /* typeidx unresolvable */
             }
-            rc = parse_functype(&typep, ftype[i], &pc, &rcnt);
+            rc = parse_functype(&typep, ftype[i], &pc, &rcnt, ptypes,
+                                (uint32_t)WASM_MAX_LOCALS_PER_FRAME, &rtype);
             if (rc != WASM_OK) {
                 return rc;
             }
@@ -1015,6 +1347,14 @@ wasm_err_t wasm_instantiate(wasm_vm_t *vm, const wasm_module_t *mod,
                 return (tr == WASM_TRAP_NULL) ? WASM_ERR_NULL
                                               : WASM_ERR_TYPE_MISMATCH_IMPORT;
             }
+            /* Record the full signature for call_indirect (pc <= cap here:
+             * pc + locals_total <= cap was just enforced). */
+            for (q = 0u; q < pc; q++) {
+                vm->funcs[nimports + i].param_types[q] = ptypes[q];
+            }
+            vm->funcs[nimports + i].return_type =
+                (rcnt > 0u) ? rtype : 0u;
+            vm->funcs[nimports + i].has_sig = 1;
         }
         if (has_code && cur != end) {
             return WASM_ERR_INVALID_SECTION; /* trailing bytes */
@@ -1029,6 +1369,16 @@ wasm_err_t wasm_instantiate(wasm_vm_t *vm, const wasm_module_t *mod,
         if (tr != WASM_TRAP_OK) {
             return (tr == WASM_TRAP_NULL) ? WASM_ERR_NULL
                                           : WASM_ERR_TYPE_MISMATCH_IMPORT;
+        }
+        /* Carry full signatures for call_indirect when registered typed. */
+        if (e->has_types) {
+            uint32_t q;
+            for (q = 0u; q < e->param_count; q++) {
+                vm->funcs[i].param_types[q] = e->param_types[q];
+            }
+            vm->funcs[i].return_type =
+                (e->return_count > 0u) ? e->return_type : 0u;
+            vm->funcs[i].has_sig = 1;
         }
     }
 
@@ -1085,6 +1435,15 @@ wasm_err_t wasm_instantiate(wasm_vm_t *vm, const wasm_module_t *mod,
         }
     }
 
+    /* 7b. Element segments into the table (same no-partial policy).
+     * Needs function linking done (funcidx validated against the total). */
+    if (has_elem) {
+        rc = apply_elements(vm, &elemp, nimportglobals, nimports + ndefined);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+    }
+
     /* 8. Start function ([]->[] only), last. */
     if (has_start) {
         uint32_t funcidx = 0u;
@@ -1108,7 +1467,7 @@ wasm_err_t wasm_instantiate(wasm_vm_t *vm, const wasm_module_t *mod,
                 return WASM_ERR_INVALID_SECTION;
             }
             rc = parse_functype(&typep, ftype[funcidx - nimports], &pc,
-                                &rcnt);
+                                &rcnt, NULL, 0u, NULL);
             if (rc != WASM_OK) {
                 return rc;
             }

@@ -39,7 +39,9 @@ typedef enum {
     WASM_ERR_EXPORT_NOT_FOUND,   /* no export entry matches the given name */
     WASM_ERR_TYPE_MISMATCH_IMPORT, /* import/defined signature the engine cannot honor */
     WASM_ERR_DATA_OUT_OF_BOUNDS, /* data segment needs missing/out-of-range memory */
-    WASM_ERR_START_FAILED        /* start function trapped during instantiation */
+    WASM_ERR_START_FAILED,       /* start function trapped during instantiation */
+    WASM_ERR_ELEMENT_OUT_OF_BOUNDS, /* element segment exceeds the table */
+    WASM_ERR_IMPORTED_TABLES_UNSUPPORTED /* table imports have no host concept */
 } wasm_err_t;
 
 /* Human-readable error name. Zero-alloc: returns string literals. */
@@ -61,6 +63,9 @@ static inline const char *wasm_err_str(wasm_err_t e)
     case WASM_ERR_TYPE_MISMATCH_IMPORT: return "WASM_ERR_TYPE_MISMATCH_IMPORT";
     case WASM_ERR_DATA_OUT_OF_BOUNDS: return "WASM_ERR_DATA_OUT_OF_BOUNDS";
     case WASM_ERR_START_FAILED:      return "WASM_ERR_START_FAILED";
+    case WASM_ERR_ELEMENT_OUT_OF_BOUNDS: return "WASM_ERR_ELEMENT_OUT_OF_BOUNDS";
+    case WASM_ERR_IMPORTED_TABLES_UNSUPPORTED:
+        return "WASM_ERR_IMPORTED_TABLES_UNSUPPORTED";
     default:                       return "WASM_ERR_UNKNOWN";
     }
 }
@@ -142,6 +147,14 @@ typedef struct {
 #define WASM_MAX_DATA_SEGMENTS 32u
 #endif
 
+/* Phase 4 (tables): indirect function table. Default 128 entries, each a
+ * function index or empty; override with -DWASM_MAX_TABLE_SIZE=<n>. */
+#ifndef WASM_MAX_TABLE_SIZE
+#define WASM_MAX_TABLE_SIZE 128u
+#endif
+/* Empty table slot marker (no valid function index equals this). */
+#define WASM_TABLE_EMPTY 0xFFFFFFFFu
+
 /* Value types supported by WebAssembly MVP (opcode encoding values). */
 typedef enum {
     WASM_TYPE_I32 = 0x7F,
@@ -185,7 +198,10 @@ typedef enum {
     WASM_TRAP_INVALID_BLOCK_LABEL,  /* br label >= open block depth */
     WASM_TRAP_ELSE_WITHOUT_IF,      /* ELSE outside an IF then-branch */
     WASM_TRAP_INVALID_CONVERSION,   /* float->int trunc of NaN (out-of-range uses INTEGER_OVERFLOW) */
-    WASM_TRAP_GLOBAL_IMMUTABLE      /* global.set on an immutable global */
+    WASM_TRAP_GLOBAL_IMMUTABLE,     /* global.set on an immutable global */
+    WASM_TRAP_TABLE_OUT_OF_BOUNDS,  /* call_indirect index >= table length */
+    WASM_TRAP_UNDEFINED_ELEMENT,    /* call_indirect on an unset table slot */
+    WASM_TRAP_INDIRECT_TYPE_MISMATCH /* call_indirect target sig != typeidx */
 } wasm_trap_t;
 
 /* Human-readable trap name. Zero-alloc: returns string literals. */
@@ -215,6 +231,9 @@ static inline const char *wasm_trap_str(wasm_trap_t t)
     case WASM_TRAP_ELSE_WITHOUT_IF:     return "WASM_TRAP_ELSE_WITHOUT_IF";
     case WASM_TRAP_INVALID_CONVERSION:  return "WASM_TRAP_INVALID_CONVERSION";
     case WASM_TRAP_GLOBAL_IMMUTABLE:    return "WASM_TRAP_GLOBAL_IMMUTABLE";
+    case WASM_TRAP_TABLE_OUT_OF_BOUNDS: return "WASM_TRAP_TABLE_OUT_OF_BOUNDS";
+    case WASM_TRAP_UNDEFINED_ELEMENT:   return "WASM_TRAP_UNDEFINED_ELEMENT";
+    case WASM_TRAP_INDIRECT_TYPE_MISMATCH: return "WASM_TRAP_INDIRECT_TYPE_MISMATCH";
     default:                            return "WASM_TRAP_UNKNOWN";
     }
 }
@@ -242,6 +261,7 @@ typedef enum {
     OP_BR_TABLE    = 0x0E,
     OP_RETURN      = 0x0F,
     OP_CALL        = 0x10,
+    OP_CALL_INDIRECT = 0x11,
     /* 0x1A (drop) is MVP but not implemented; 0x1B select is. */
     OP_SELECT      = 0x1B,
     OP_LOCAL_GET   = 0x20,

@@ -13,9 +13,10 @@
  *   matching the MVP rule that imports precede definitions. Globals follow
  *   the same rule: imported globals first, then defined ones.
  * - MVP subset: function/global imports/exports (function exports only for
- *   lookup). Table/memory imports are parsed-and-skipped; multi-result or
- *   >32-local signatures are rejected (engine capability ceiling, reported
- *   as TYPE_MISMATCH_IMPORT).
+ *   lookup). Memory imports are parsed-and-skipped; table imports are
+ *   rejected (WASM_ERR_IMPORTED_TABLES_UNSUPPORTED: the host has no table
+ *   concept); multi-result or >32-local signatures are
+ *   rejected (engine capability ceiling, reported as TYPE_MISMATCH_IMPORT).
  */
 
 #include <stddef.h>
@@ -39,6 +40,13 @@ typedef struct {
     uint32_t return_count;
     wasm_host_func_t func;
     int used;
+    /* Full signature for call_indirect checks (only the first
+     * param_count bytes valid; return_type 0 when resultless).
+     * has_types == 0 (plain register_func) means "counts only": such
+     * entries can never satisfy an indirect signature check. */
+    uint8_t param_types[WASM_MAX_LOCALS_PER_FRAME];
+    uint8_t return_type;
+    int has_types;
 } wasm_host_entry_t;
 
 typedef struct {
@@ -63,6 +71,19 @@ wasm_trap_t wasm_host_register_func(wasm_host_registry_t *r,
                                     const char *module, const char *name,
                                     uint32_t param_count, uint32_t return_count,
                                     wasm_host_func_t func);
+
+/* Register one native callback WITH its full MVP signature for
+ * call_indirect checking. param_types/ret_types borrow on entry and are
+ * copied (NULL with nonzero count rejected); every byte must be a valid
+ * MVP valtype, param_count within the locals cap, return_count at most 1.
+ * Counts/names/callback follow the same rules as register_func. */
+wasm_trap_t wasm_host_register_func_typed(wasm_host_registry_t *r,
+                                          const char *module, const char *name,
+                                          const wasm_valtype_t *param_types,
+                                          uint32_t param_count,
+                                          const wasm_valtype_t *ret_types,
+                                          uint32_t return_count,
+                                          wasm_host_func_t func);
 
 /* Register one host-provided global (a copy of *value is stored; the
  * caller's pointer is never retained). type must be a valid MVP valtype,
