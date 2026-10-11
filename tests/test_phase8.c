@@ -474,6 +474,12 @@ static void test_select_f64(void)
 static void test_select_traps(void)
 {
     printf("[T] select type mismatches trap\n");
+    { /* condition is i64, not i32 */
+        static const uint8_t k[] = { 0x41, 0x01, 0x41, 0x02, 0x42, 0x01,
+                                     0x1B };
+        CHECK(run_flat(k, sizeof(k)) == WASM_TRAP_TYPE_MISMATCH,
+              "select cond i64 traps");
+    }
     { /* v2=i64, v1=i32 */
         static const uint8_t k[] = { 0x42, 0x01, 0x41, 0x02, 0x41, 0x01,
                                      0x1B };
