@@ -23,6 +23,7 @@
 #include <string.h>
 
 #include "leb128.h"
+#include "version.h"
 #include "wasm_host.h"
 #include "wasm_parser.h"
 #include "wasm_validate.h"
@@ -31,6 +32,9 @@
 #define RUNNER_FILE_MAX (64u * 1024u)
 #define RUNNER_ARENA_PAGES 1u
 #define RUNNER_STEP_BUDGET 10000000u
+
+static int g_quiet;
+static int g_result_line;
 
 static uint8_t g_file_buf[RUNNER_FILE_MAX];
 static uint8_t g_arena[RUNNER_ARENA_PAGES * WASM_PAGE_SIZE];
@@ -52,30 +56,128 @@ static wasm_trap_t host_print_i32(struct wasm_vm *vm,
     if (args[0].type != WASM_TYPE_I32) {
         return WASM_TRAP_TYPE_MISMATCH;
     }
-    printf("%d\n", (int)args[0].value.i32);
+    if (!g_result_line) printf("%d\n", (int)args[0].value.i32);
     return WASM_TRAP_OK;
 }
 
 static void usage(const char *prog)
 {
-    fprintf(stderr, "usage: %s <file.wasm> [export] [i32 args...]\n", prog);
+    fprintf(stderr, "usage: %s [--quiet] [--result-line] <file.wasm> [export] [--arg TYPE:VALUE ...]\n", prog);
     fprintf(stderr, "       %s --dump <file.wasm>\n", prog);
+    fprintf(stderr, "       %s --version\n", prog);
 }
 
 /* Strict i32 parse: no trailing garbage, no overflow. */
 static int parse_i32(const char *s, int32_t *out)
 {
-    long v;
+    long long v;
     char *e = NULL;
     if (s == NULL || *s == '\0' || out == NULL) {
         return 0;
     }
-    v = strtol(s, &e, 0);
-    if (e == s || *e != '\0' || v < (long)INT32_MIN || v > (long)INT32_MAX) {
+    v = strtoll(s, &e, 0);
+    if (e == s || *e != '\0' || v < (long long)INT32_MIN || v > (long long)INT32_MAX) {
         return 0;
     }
     *out = (int32_t)v;
     return 1;
+}
+
+static int parse_i64(const char *s, int64_t *out)
+{
+    long long v;
+    char *e = NULL;
+    if (s == NULL || *s == '\0' || out == NULL) {
+        return 0;
+    }
+    v = strtoll(s, &e, 0);
+    if (e == s || *e != '\0') {
+        return 0;
+    }
+    *out = (int64_t)v;
+    return 1;
+}
+
+static int parse_float_arg(const char *s, int is_f32, wasm_val_t *out)
+{
+    char *e = NULL;
+    if (s == NULL || *s == '\0' || out == NULL) {
+        return 0;
+    }
+    if (strncmp(s, "0x", 2u) == 0 || strncmp(s, "0X", 2u) == 0) {
+        unsigned long long bits = strtoull(s, &e, 16);
+        unsigned long long max = is_f32 ? 0xFFFFFFFFULL : 0xFFFFFFFFFFFFFFFFULL;
+        if (e == s + 2 || *e != '\0' || bits > max) {
+            return 0;
+        }
+        out->type = is_f32 ? WASM_TYPE_F32 : WASM_TYPE_F64;
+        if (is_f32) {
+            uint32_t b = (uint32_t)bits;
+            memcpy(&out->value.f32, &b, sizeof(b));
+        } else {
+            uint64_t b = (uint64_t)bits;
+            memcpy(&out->value.f64, &b, sizeof(b));
+        }
+        return 1;
+    }
+    if (is_f32) {
+        float v = strtof(s, &e);
+        if (e == s || *e != '\0') {
+            return 0;
+        }
+        out->type = WASM_TYPE_F32;
+        out->value.f32 = v;
+    } else {
+        double v = strtod(s, &e);
+        if (e == s || *e != '\0') {
+            return 0;
+        }
+        out->type = WASM_TYPE_F64;
+        out->value.f64 = v;
+    }
+    return 1;
+}
+
+static int parse_typed_arg(const char *s, wasm_val_t *out)
+{
+    const char *colon;
+    if (s == NULL || out == NULL) {
+        return 0;
+    }
+    colon = strchr(s, ':');
+    if (colon == NULL || colon == s || colon[1] == '\0') {
+        return 0;
+    }
+    if ((size_t)(colon - s) == 3u && strncmp(s, "i32", 3u) == 0) {
+        int32_t v;
+        if (!parse_i32(colon + 1, &v)) return 0;
+        out->type = WASM_TYPE_I32; out->value.i32 = v; return 1;
+    }
+    if ((size_t)(colon - s) == 3u && strncmp(s, "i64", 3u) == 0) {
+        int64_t v;
+        if (!parse_i64(colon + 1, &v)) return 0;
+        out->type = WASM_TYPE_I64; out->value.i64 = v; return 1;
+    }
+    if ((size_t)(colon - s) == 3u && strncmp(s, "f32", 3u) == 0) {
+        return parse_float_arg(colon + 1, 1, out);
+    }
+    if ((size_t)(colon - s) == 3u && strncmp(s, "f64", 3u) == 0) {
+        return parse_float_arg(colon + 1, 0, out);
+    }
+    return 0;
+}
+
+static void print_hex64(uint64_t bits, unsigned digits)
+{
+    static const char hex[] = "0123456789abcdef";
+    char text[17];
+    unsigned i;
+    text[digits] = '\0';
+    for (i = 0u; i < digits; i++) {
+        text[digits - 1u - i] = hex[(unsigned)(bits & 0xFu)];
+        bits >>= 4u;
+    }
+    printf("%s", text);
 }
 
 static void print_i64(int64_t v)
@@ -120,6 +222,38 @@ static void print_val(const wasm_val_t *v)
     default:
         printf("result: <unknown type 0x%02x>\n", (unsigned)v->type);
         break;
+    }
+}
+
+static void print_result_line(const wasm_val_t *v)
+{
+    char buf[21];
+    uint64_t u;
+    int neg;
+    int pos;
+    uint32_t b32;
+    uint64_t b64;
+    if (v == NULL) {
+        printf("RESULT void\n");
+        return;
+    }
+    switch (v->type) {
+    case WASM_TYPE_I32: printf("RESULT i32 %d\n", (int)v->value.i32); break;
+    case WASM_TYPE_I64:
+        neg = v->value.i64 < 0;
+        u = neg ? (uint64_t)(-(v->value.i64 + 1)) + 1u : (uint64_t)v->value.i64;
+        pos = 20; buf[20] = '\0';
+        do { buf[--pos] = (char)('0' + (u % 10u)); u /= 10u; } while (u != 0u);
+        if (neg) buf[--pos] = '-';
+        printf("RESULT i64 %s\n", &buf[pos]);
+        break;
+    case WASM_TYPE_F32:
+        memcpy(&b32, &v->value.f32, sizeof(b32));
+        printf("RESULT f32 0x"); print_hex64(b32, 8u); printf("\n"); break;
+    case WASM_TYPE_F64:
+        memcpy(&b64, &v->value.f64, sizeof(b64));
+        printf("RESULT f64 0x"); print_hex64(b64, 16u); printf("\n"); break;
+    default: printf("RESULT void\n"); break;
     }
 }
 
@@ -346,24 +480,83 @@ int main(int argc, char **argv)
     uint64_t need;
     uint32_t budget = RUNNER_STEP_BUDGET;
     wasm_val_t res;
+    wasm_val_t cli_args[WASM_MAX_LOCALS_PER_FRAME];
+    uint32_t cli_nargs = 0u;
+    int argi = 1;
     int dump_mode = 0;
 
     if (argc < 2) {
         usage(argv[0]);
         return 2;
     }
-    if (strcmp(argv[1], "--dump") == 0) {
-        if (argc < 3) {
-            usage(argv[0]);
+    while (argi < argc && argv[argi][0] == '-') {
+        if (strcmp(argv[argi], "--version") == 0) {
+            printf("%s\n", WASM_ENGINE_VERSION);
+            return 0;
+        }
+        if (strcmp(argv[argi], "--quiet") == 0) {
+            g_quiet = 1; argi++; continue;
+        }
+        if (strcmp(argv[argi], "--result-line") == 0) {
+            g_result_line = 1; g_quiet = 1; argi++; continue;
+        }
+        if (strcmp(argv[argi], "--dump") == 0) {
+            dump_mode = 1; argi++; break;
+        }
+        break;
+    }
+    if (argi >= argc) {
+        usage(argv[0]);
+        return 2;
+    }
+    path = argv[argi++];
+    if (!dump_mode && argi < argc && argv[argi][0] != '-') {
+        export_name = argv[argi++];
+    }
+    while (!dump_mode && argi < argc) {
+        const char *value = argv[argi];
+        wasm_val_t parsed;
+        if (strcmp(value, "--quiet") == 0) {
+            g_quiet = 1; argi++; continue;
+        }
+        if (strcmp(value, "--result-line") == 0) {
+            g_result_line = 1; g_quiet = 1; argi++; continue;
+        }
+        if (strcmp(value, "--arg") == 0) {
+            if (argi + 1 >= argc || cli_nargs >= (uint32_t)WASM_MAX_LOCALS_PER_FRAME ||
+                !parse_typed_arg(argv[argi + 1], &parsed)) {
+                fprintf(stderr, "error: expected --arg TYPE:VALUE\n");
+                return 2;
+            }
+            cli_args[cli_nargs++] = parsed; argi += 2u; continue;
+        }
+        if (strncmp(value, "--arg=", 6u) == 0) {
+            if (cli_nargs >= (uint32_t)WASM_MAX_LOCALS_PER_FRAME ||
+                !parse_typed_arg(value + 6, &parsed)) {
+                fprintf(stderr, "error: expected --arg TYPE:VALUE\n");
+                return 2;
+            }
+            cli_args[cli_nargs++] = parsed; argi++; continue;
+        }
+        if (strchr(value, ':') == NULL) {
+            int32_t legacy;
+            /* legacy positional argument */
+            if (!parse_i32(value, &legacy)) {
+                fprintf(stderr, "error: unknown argument '%s'\n", value);
+                return 2;
+            }
+            parsed.type = WASM_TYPE_I32;
+            parsed.value.i32 = legacy;
+        } else if (!parse_typed_arg(value, &parsed)) {
+            fprintf(stderr, "error: unknown argument '%s'\n", value);
             return 2;
         }
-        dump_mode = 1;
-        path = argv[2];
-    } else {
-        path = argv[1];
-        if (argc >= 3) {
-            export_name = argv[2];
+        if (cli_nargs >= (uint32_t)WASM_MAX_LOCALS_PER_FRAME) {
+            fprintf(stderr, "error: unknown argument '%s'\n", value);
+            return 2;
         }
+        cli_args[cli_nargs++] = parsed;
+        argi++;
     }
 
     /* a) File -> fixed static buffer (never malloc'd). */
@@ -392,7 +585,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "error: short read on '%s'\n", path);
         return 2;
     }
-    printf("[load] %lu bytes from '%s'\n", (unsigned long)nread, path);
+    if (!g_quiet) printf("[load] %lu bytes from '%s'\n", (unsigned long)nread, path);
 
     /* b) Header + section map (Phase 1). */
     ec = wasm_parse_header(g_file_buf, nread, &mod);
@@ -400,7 +593,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "error: bad header: %s\n", wasm_err_str(ec));
         return 1;
     }
-    printf("[parse] header ok\n");
+    if (!g_quiet) printf("[parse] header ok\n");
 
     /* Inspection only: describe the module, never execute it. */
     if (dump_mode) {
@@ -415,7 +608,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "error: validation: %s\n", wasm_err_str(ec));
         return 1;
     }
-    printf("[validate] module ok\n");
+    if (!g_quiet) printf("[validate] module ok\n");
 
     /* c) Host callbacks. */
     tr = wasm_host_registry_init(&g_reg);
@@ -469,7 +662,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "error: instantiate: %s\n", wasm_err_str(ec));
         return 1;
     }
-    printf("[link] %u function(s)\n", (unsigned)nfuncs);
+    if (!g_quiet) printf("[link] %u function(s)\n", (unsigned)nfuncs);
 
     /* d) Resolve the export. */
     ec = wasm_find_section(&mod, (uint8_t)WASM_SECT_EXPORT, &exsec);
@@ -493,12 +686,12 @@ int main(int argc, char **argv)
                 export_name, (unsigned)fidx, (unsigned)nfuncs);
         return 1;
     }
-    printf("[export] '%s' -> func %u\n", export_name, (unsigned)fidx);
+    if (!g_quiet) printf("[export] '%s' -> func %u\n", export_name, (unsigned)fidx);
 
     /* e) Push CLI args, enter, execute with watchdog, collect the result. */
     {
         const wasm_func_desc_t *d = &g_vm.funcs[fidx];
-        uint32_t nargs = (argc > 3) ? (uint32_t)(argc - 3) : 0u;
+        uint32_t nargs = cli_nargs;
         if (nargs != d->param_count) {
             fprintf(stderr, "error: '%s' takes %u arg(s), got %u\n",
                     export_name, (unsigned)d->param_count, (unsigned)nargs);
@@ -508,41 +701,31 @@ int main(int argc, char **argv)
             /* Exported host function: invoke directly, no bytecode. */
             wasm_val_t hargs[WASM_MAX_LOCALS_PER_FRAME];
             wasm_val_t hrets[1];
-            for (i = 0u; i < nargs; i++) {
-                int32_t v = 0;
-                if (!parse_i32(argv[3 + i], &v)) {
-                    fprintf(stderr, "error: arg %u ('%s') is not an i32\n",
-                            (unsigned)i, argv[3 + i]);
-                    return 2;
-                }
-                hargs[i].type = WASM_TYPE_I32;
-                hargs[i].value.i32 = v;
-            }
+            for (i = 0u; i < nargs; i++) hargs[i] = cli_args[i];
             hrets[0].type = WASM_TYPE_I32;
             hrets[0].value.i32 = 0;
             tr = d->host_cb(&g_vm, hargs, nargs, hrets, d->return_count);
             if (tr != WASM_TRAP_OK) {
-                fprintf(stderr, "error: host call trapped: %s\n",
-                        wasm_trap_str(tr));
+                if (g_result_line) printf("RESULT trap %s\n", wasm_trap_str(tr));
+                else fprintf(stderr, "error: host call trapped: %s\n", wasm_trap_str(tr));
                 return 1;
             }
             if (d->return_count > 0u) {
-                print_val(&hrets[0]);
+                if (g_result_line) print_result_line(&hrets[0]);
+                else print_val(&hrets[0]);
             } else {
-                printf("ok (no result)\n");
+                if (g_result_line) printf("RESULT void\n");
+                else printf("ok (no result)\n");
             }
             return 0;
         }
         for (i = 0u; i < nargs; i++) {
-            int32_t v = 0;
-            wasm_val_t w;
-            if (!parse_i32(argv[3 + i], &v)) {
-                fprintf(stderr, "error: arg %u ('%s') is not an i32\n",
-                        (unsigned)i, argv[3 + i]);
+            wasm_val_t w = cli_args[i];
+            if (w.type != d->param_types[i]) {
+                fprintf(stderr, "error: arg %u type does not match parameter\n",
+                        (unsigned)i);
                 return 2;
             }
-            w.type = WASM_TYPE_I32;
-            w.value.i32 = v;
             tr = wasm_stack_push(&g_vm.operands, w);
             if (tr != WASM_TRAP_OK) {
                 fprintf(stderr, "error: push arg: %s\n", wasm_trap_str(tr));
@@ -582,7 +765,8 @@ int main(int argc, char **argv)
             tr = wasm_vm_step(&g_vm);
         }
         if (tr != WASM_TRAP_OK) {
-            fprintf(stderr, "error: trapped: %s\n", wasm_trap_str(tr));
+            if (g_result_line) printf("RESULT trap %s\n", wasm_trap_str(tr));
+            else fprintf(stderr, "error: trapped: %s\n", wasm_trap_str(tr));
             return 1;
         }
         if (d->return_count > 0u) {
@@ -592,9 +776,11 @@ int main(int argc, char **argv)
                         wasm_trap_str(tr));
                 return 1;
             }
-            print_val(&res);
+            if (g_result_line) print_result_line(&res);
+            else print_val(&res);
         } else {
-            printf("ok (no result)\n");
+            if (g_result_line) printf("RESULT void\n");
+            else printf("ok (no result)\n");
         }
     }
     return 0;

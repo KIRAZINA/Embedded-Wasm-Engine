@@ -28,9 +28,13 @@ T8        = $(BUILD)/test_phase8
 T9        = $(BUILD)/test_phase9
 T10       = $(BUILD)/test_phase10
 T11       = $(BUILD)/test_phase11
+T12       = $(BUILD)/test_phase12
 TCLI      = $(BUILD)/test_cli
+FUZZ      = $(BUILD)/fuzz_smoke
+SEED      ?= 1
+ITER      ?= 1000000
 
-all: $(RUNNER) $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(T8) $(T9) $(T10) $(T11) $(TCLI)
+all: $(RUNNER) $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(T8) $(T9) $(T10) $(T11) $(T12) $(TCLI)
 
 $(RUNNER): $(SRC) src/main.c
 	$(MKDIR_P)
@@ -84,12 +88,20 @@ $(T11): src/leb128.c src/wasm_parser.c src/wasm_validate.c tests/test_phase11.c
 	$(MKDIR_P)
 	$(CC) $(CFLAGS) src/leb128.c src/wasm_parser.c src/wasm_validate.c tests/test_phase11.c -o $(T11) $(LDLIBS)
 
+$(T12): tests/test_phase12.c
+	$(MKDIR_P)
+	$(CC) $(CFLAGS) tests/test_phase12.c -o $(T12) $(LDLIBS)
+
+$(FUZZ): $(SRC) tests/fuzz_smoke.c
+	$(MKDIR_P)
+	$(CC) $(CFLAGS) $(SRC) tests/fuzz_smoke.c -o $(FUZZ) $(LDLIBS)
+
 test: all
 ifeq ($(OS),Windows_NT)
-	powershell -NoProfile -Command "$$pass=0; $$fail=0; $$tests=@('build/test_phase1','build/test_phase2','build/test_phase3','build/test_phase4','build/test_phase5','build/test_phase6','build/test_phase7','build/test_phase8','build/test_phase9','build/test_phase10','build/test_phase11','build/test_cli'); foreach ($$t in $$tests) { $$o=& $$t; $$o | Select-Object -Last 3; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }; $$m=$$o | Select-String 'RESULT: ([0-9]+) passed, ([0-9]+) failed'; if ($$m) { $$pass += [int]$$m.Matches[0].Groups[1].Value; $$fail += [int]$$m.Matches[0].Groups[2].Value } }; Write-Output ('TOTAL: {0} passed, {1} failed' -f $$pass,$$fail); if ($$fail -ne 0) { exit 1 }"
+	powershell -NoProfile -Command "$$pass=0; $$fail=0; $$tests=@('build/test_phase1','build/test_phase2','build/test_phase3','build/test_phase4','build/test_phase5','build/test_phase6','build/test_phase7','build/test_phase8','build/test_phase9','build/test_phase10','build/test_phase11','build/test_phase12','build/test_cli'); foreach ($$t in $$tests) { $$o=& $$t; $$o | Select-Object -Last 3; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }; $$m=$$o | Select-String 'RESULT: ([0-9]+) passed, ([0-9]+) failed'; if ($$m) { $$pass += [int]$$m.Matches[0].Groups[1].Value; $$fail += [int]$$m.Matches[0].Groups[2].Value } }; Write-Output ('TOTAL: {0} passed, {1} failed' -f $$pass,$$fail); if ($$fail -ne 0) { exit 1 }"
 else
 	@pass=0; fail=0; \
-	for t in $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(T8) $(T9) $(T10) $(T11) $(TCLI); do \
+	for t in $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(T8) $(T9) $(T10) $(T11) $(T12) $(TCLI); do \
 	  echo "== $$t =="; \
 	  out=`./$$t`; ec=$$?; \
 	  echo "$$out" | tail -n 3; \
@@ -135,8 +147,19 @@ test10: $(T10)
 test11: $(T11)
 	./$(T11)
 
+test12: $(T12)
+	./$(T12)
+
 testcli: $(TCLI)
 	./$(TCLI)
+
+fuzz: $(FUZZ)
+	./$(FUZZ) $(SEED) $(ITER)
+
+sanitize:
+	$(MAKE) CFLAGS="$(CFLAGS) -fsanitize=address,undefined -fno-sanitize-recover=all" all $(FUZZ)
+	$(MAKE) CFLAGS="$(CFLAGS) -fsanitize=address,undefined -fno-sanitize-recover=all" test
+	$(MAKE) CFLAGS="$(CFLAGS) -fsanitize=address,undefined -fno-sanitize-recover=all" fuzz SEED=1 ITER=1000000
 
 runner: $(RUNNER)
 	./$(RUNNER)
@@ -144,4 +167,4 @@ runner: $(RUNNER)
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 testcli runner clean
+.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 testcli runner fuzz sanitize clean

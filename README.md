@@ -60,7 +60,9 @@ anywhere**, verified by audit. All builds are warning-free under
 - Blocks carry void or i32 results; functions return at most one value.
 - Fixed capacities (see Limits); oversized modules trap cleanly instead of
   allocating.
-- No float parsing of CLI args (i32 only); no SIMD, threads,
+- CLI supports `--arg i32:5`, `--arg i64:-1`, `--arg f32:3.5`, and
+  `--arg f64:2e10`; hexadecimal float values use raw bits, e.g.
+  `f32:0x3f800000` or `f64:0x3ff0000000000000`.
   or GC extensions.
 - Table imports are rejected (`WASM_ERR_IMPORTED_TABLES_UNSUPPORTED`):
   the host has no table concept, so a module importing a table cannot
@@ -115,6 +117,11 @@ gcc -std=c11 -Wall -Wextra -Werror -Iinclude src/*.c src/main.c -o build/wasm_ru
 
 ## Usage
 
+Machine clients can use `--quiet --result-line`; successful results are
+`RESULT i32 N`, `RESULT i64 N`, `RESULT f32 0xXXXXXXXX`, `RESULT f64
+0xXXXXXXXXXXXXXXXX`, or `RESULT void`. Runtime failures use
+`RESULT trap NAME`. `--version` prints `WASM_ENGINE_VERSION`.
+
 Run an exported function (defaults to `main`), passing i32 arguments:
 
 ```powershell
@@ -167,6 +174,23 @@ as i32 cells) via a data segment, then loops calling `env.print_i32`):
 
 ```powershell
 .\build\wasm_runner.exe demo\hello.wasm main
+
+## Conformance and fuzz tooling
+
+`make fuzz SEED=1 ITER=1000000` runs the deterministic in-repo smoke fuzzer.
+`make sanitize` builds the runner, all tests, and the fuzzer with AddressSanitizer
+and UndefinedBehaviorSanitizer, then runs the suite and one-million-iteration
+fuzz pass. The sanitizer runtimes must be provided by the selected C toolchain.
+
+The spec harness is `tools/run_spec_suite.py` and uses only Python 3's standard
+library. The user supplies `.wast` conversions; no binaries are bundled. A
+typical preparation command is:
+
+`wast2json --spec path/to/test.wast -o path/to/test.json`
+
+Then run `python tools/run_spec_suite.py path/to/test.json --runner build/wasm_runner`.
+The curated default names are documented in the script; `--filter=NAME` limits
+the run. Unsupported JSON command forms are counted as skips and reported.
 # [load] 125 bytes from 'demo\hello.wasm'
 # [parse] header ok
 # [link] 2 function(s)
@@ -265,6 +289,9 @@ Standalone `assert`-style suites, no test framework. Current status:
 | br_table labels | 256 (`WASM_MAX_BR_TABLE_LABELS`, `-D` overridable) | `WASM_TRAP_INVALID_ARGUMENT` |
 | Validation value stack | 1024 (`WASM_VALIDATE_STACK_MAX`, `-D` overridable) | `WASM_ERR_SECTION_OVERFLOW` |
 | Validation control depth | 32 (`WASM_MAX_CONTROL_STACK_DEPTH`, shared with execution) | `WASM_ERR_INVALID_BLOCK` |
+
+Fuzz-smoke defaults are also overrideable at compile time: `FUZZ_MAX_BYTES`
+256, `FUZZ_PAGE_COUNT` 1, and `FUZZ_STEP_BUDGET` 10.
 
 ## Memory footprint
 
