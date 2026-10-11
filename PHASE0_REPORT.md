@@ -184,3 +184,137 @@ As forensically noted in `README.md:457` and `PROJECT_ARCHITECTURE.md:89, 1034`,
 | Multi-value blocks / functions | No | `include/wasm_types.h:40`, `src/wasm_vm.c:1160` | Explicitly omitted (MVP returns at most 1 value; README:439) |
 | Physical hardware deployment (ESP32 / STM32) | Partial | `targets/stm32/embedded_demo.c`, `targets/esp32/CMakeLists.txt` | Cross-builds cleanly in ARM CI; physical GPIO bindings open (README:440) |
 
+## 5. CI inspection (task 0.5)
+
+### Complete `.github/workflows/ci.yml` content
+
+```yaml
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unix-build-test:
+    name: ${{ matrix.os }} / ${{ matrix.cc }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            cc: gcc
+          - os: ubuntu-latest
+            cc: clang
+          - os: macos-latest
+            cc: clang
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler and tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y make ${{ matrix.cc }}
+      - name: Build
+        run: make CC=${{ matrix.cc }}
+      - name: Test
+        run: make CC=${{ matrix.cc }} test
+
+  windows-mingw:
+    name: windows / mingw-w64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            mingw-w64-x86_64-gcc
+            python
+      - name: Build
+        run: make OS= CC=gcc PYTHON=python
+      - name: Test
+        run: make OS= CC=gcc PYTHON=python test
+
+  sanitize:
+    name: sanitize / ${{ matrix.cc }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler and tools
+        run: sudo apt-get update && sudo apt-get install -y make ${{ matrix.cc }}
+      - name: Sanitized build and tests
+        run: >-
+          make CC=${{ matrix.cc }}
+          CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude
+          -fsanitize=address,undefined -fno-sanitize-recover=all"
+          all test
+
+  fuzz-smoke:
+    name: fuzz smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler and tools
+        run: sudo apt-get update && sudo apt-get install -y make gcc
+      - name: Run deterministic fuzz smoke
+        run: make CC=gcc fuzz SEED=42 ITER=200000
+
+  cross-arm:
+    name: Cortex-M4 cross build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ARM GNU toolchain
+        run: sudo apt-get update && sudo apt-get install -y make gcc-arm-none-eabi binutils-arm-none-eabi
+      - name: Build library and embedded demo
+        run: make CC=gcc PYTHON=python3 arm-cross
+      - name: Check artifacts
+        run: test -s build/arm/libwasm_engine.a && test -s build/arm/embedded_demo.elf
+
+  size-report:
+    name: static footprint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler and tools
+        run: sudo apt-get update && sudo apt-get install -y make gcc
+      - name: Build and print footprint
+        run: make CC=gcc size-report
+```
+
+### Analysis of CI configuration
+
+- **Jobs & platforms:**
+  - `unix-build-test`: Matrix on `ubuntu-latest` (`gcc`, `clang`) and `macos-latest` (`clang`).
+  - `windows-mingw`: `windows-latest` under MSYS2 MINGW64 environment with `mingw-w64-x86_64-gcc`.
+  - `sanitize`: `ubuntu-latest` matrix with `gcc` and `clang`.
+  - `fuzz-smoke`: `ubuntu-latest` with `gcc` (200,000 deterministic fuzz iterations with SEED=42).
+  - `cross-arm`: `ubuntu-latest` cross-compiling with `gcc-arm-none-eabi` for Cortex-M4, validating static library and ELF artifacts.
+  - `size-report`: `ubuntu-latest` measuring static footprint and binary section sizes.
+- **Compilers:** `gcc`, `clang`, `arm-none-eabi-gcc`.
+- **Compiler flags:**
+  - Baseline: `-std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude`.
+  - Sanitizer job: Adds `-fsanitize=address,undefined -fno-sanitize-recover=all`.
+- **Execution of tests and sanitizers:**
+  - Standard test suites (`make test`) run on Linux, macOS, Windows MSYS2, and in sanitized mode.
+  - Sanitizers (ASan + UBSan) run cleanly on Linux for both GCC and Clang.
+  - Deterministic fuzzer runs in every CI build.
+
+### Identified CI gaps
+
+1. **Strict opcode matrix gating missing:** CI does not execute `python tools/opcode_matrix.py --strict`, so regressions in opcode coverage or validator omissions do not fail the build.
+2. **Spec suite not run in CI:** `tools/run_spec_suite.py` is never invoked in any CI job.
+3. **Hard invariant 1 (zero-allocation) not verified:** CI lacks a step running `grep -rnE "malloc|calloc|realloc|alloca|strdup" src/ include/ tests/ tools/ targets/` to guarantee zero dynamic allocation mechanically.
+4. **Native Windows shell untested:** CI runs Windows inside MSYS2 bash (where POSIX `rm` is available). Native Windows PowerShell / CMD environments (which run `mingw32-make` without `rm` on PATH) are untested and fail on `make clean`.
+5. **No Clang sanitizer job on macOS:** Sanitizers are only executed on Ubuntu Linux.
+
+
