@@ -17,6 +17,18 @@ anywhere**, verified by audit. All builds are warning-free under
   `%32`-masked shifts with portable arithmetic `shr_s`, all comparisons),
   plus the full i64 ALU (`%64`-masked shifts, `INT64_MIN/-1` trapping).
   `INT32_MIN/-1` and division-by-zero trap instead of invoking C UB.
+- **Float core** - complete f32/f64 MVP set: const (bit-exact LE
+  immediates), add/sub/mul/div (x/0 is +/-Inf, 0/0 is NaN, never a trap),
+  sqrt (negative -> NaN), min/max (NaN in -> canonical quiet NaN;
+  min(+0,-0) = -0, max(+0,-0) = +0), abs/neg/copysign and all four
+  reinterprets (pure bit patterns), ceil/floor/trunc, nearest
+  (hand-rolled roundTiesToEven), all 12 comparisons, all 8 truncating
+  conversions (NaN -> WASM_TRAP_INVALID_CONVERSION, out-of-range ->
+  WASM_TRAP_INTEGER_OVERFLOW, exact power-of-two boundaries), all
+  int<->float converts plus demote/promote. NaN payloads: const/memory
+  round-trips are bit-exact; min/max emit canonical quiet NaNs
+  (0x7FC00000, 0x7FF8000000000000); other arithmetic propagates the
+  host NaN (quiet bit guaranteed).
 - **Structured control flow** — `block`/`loop`/`if`/`else`/`end`,
   `br`/`br_if` with relative labels, `return`, `call`, `local.get/set/tee`.
 - **Linear memory** — bounds-checked little-endian `u8/i32/i64/f32/f64`
@@ -31,8 +43,9 @@ anywhere**, verified by audit. All builds are warning-free under
 
 ## Scope limits (by design)
 
-- MVP integer subset: f32/f64 values can be stored, loaded, and passed
-  through, but there are **no float arithmetic opcodes**.
+- No f32/f64 load/store opcodes yet (`0x2A/0x2B/0x38/0x39`): the
+  bounds-checked, NaN-payload-exact memory helpers exist and are tested,
+  but the interpreter does not dispatch float memory instructions.
 - Blocks carry void or i32 results; functions return at most one value.
 - Fixed capacities (see Limits); oversized modules trap cleanly instead of
   allocating.
@@ -51,15 +64,20 @@ anywhere**, verified by audit. All builds are warning-free under
 ├── src/               # leb128.c, wasm_parser.c, wasm_stack.c, wasm_memory.c,
 │                      #   wasm_frame.c, wasm_control.c, wasm_vm.c,
 │                      #   wasm_host.c, main.c (CLI runner)
-├── tests/             # test_phase1.c … test_phase6.c (assert-based, no framework)
-├── demo/              # add.wasm (main(a,b)->a+b), print.wasm (host-callback demo)
-└── build/             # wasm_runner + 6 test binaries (generated)
+├── tests/             # test_phase1.c … test_phase7.c, test_cli.c (assert-based, no framework)
+├── demo/              # add.wasm (main(a,b)->a+b), print.wasm (host-callback demo),
+│                      #   fadd.wasm (main()->f32 { 1.5 + 2.5 })
+└── build/             # wasm_runner + 8 test binaries (generated)
 ```
 
 ## Requirements
 
 - A C11 compiler (gcc/clang). POSIX `make` + shell for the Makefile.
-- No libraries beyond the C standard library.
+- C standard library plus `libm` for the float core (`<math.h>`:
+  `sqrt`/`ceil`/`floor`/`trunc`/`isnan` only — `min`/`max`/`nearest` and
+  all trunc conversions are hand-implemented for exact WASM semantics).
+  The Makefile links it via `LDLIBS ?= -lm` (override or empty it if your
+  toolchain needs no `-lm`).
 
 ## Build
 
@@ -100,6 +118,22 @@ Guest-to-host callback demo (`print.wasm` imports `env.print_i32`):
 # result: 35 (i32)
 ```
 
+Float demo (`fadd.wasm` computes `1.5 + 2.5` with no arguments):
+
+```powershell
+.\build\wasm_runner.exe demo\fadd.wasm main
+# [load] 45 bytes from 'demo\fadd.wasm'
+# [parse] header ok
+# [link] 1 function(s)
+# [export] 'main' -> func 0
+# result: 4 (f32)
+```
+
+Result formats: `result: <int> (i32)`, `result: <int> (i64)`,
+`result: <%.9g> (f32)` (9 significant digits round-trip any f32),
+`result: <%.17g> (f64)` (17 digits round-trip any f64).
+Non-finite floats print as C99 `nan`/`inf` (e.g. `result: nan (f32)`).
+
 Inspect a module without executing it:
 
 ```powershell
@@ -124,7 +158,7 @@ e.g. `WASM_TRAP_DIV_BY_ZERO`), `2` usage/I/O error.
 ## Testing
 
 Standalone `assert`-style suites, no test framework. Current status:
-**681/681 passing, 0 failed** (`make test` prints `TOTAL: 681 passed, 0 failed`).
+**1038/1038 passing, 0 failed** (`make test` prints `TOTAL: 1038 passed, 0 failed`).
 
 | Suite | Coverage | Checks |
 |---|---|---|
@@ -135,6 +169,7 @@ Standalone `assert`-style suites, no test framework. Current status:
 | `test_phase5` | blocks/loops/branches, factorial, `call`/`return` interop | 74 |
 | `test_phase6` | Host callbacks, export lookup, import binding, instantiation, i64 ALU, CLI `--dump` output | 160 |
 | `test_cli` | End-to-end runner runs of hand-built `()->i64` modules, exact `result:` rendering incl. `INT64_MIN` | 15 |
+| `test_phase7` | f32/f64 const/arith/sqrt/min-max/abs-neg-copysign/round/nearest/cmp, all 8 trunc boundaries, converts, reinterprets, NaN propagation, memory NaN round-trips, CLI f32 run + dump | 357 |
 
 ## Architecture
 
@@ -188,9 +223,11 @@ cost plus whatever arena it provisions.
 
 Phases 1–4 of the plan are implemented (delivered as six incremental phases
 here); host integration works through the generic callback registry, proven
-with `print_i32`. Deliberately still open: f32/f64 arithmetic opcodes,
-multi-value blocks/functions, and physical deployment to an ESP32/STM32
-target (GPIO/LED bindings would register through the existing host table).
+with `print_i32`. The f32/f64 arithmetic gap is closed (Phase 1 float work,
+proven by `test_phase7` + `demo/fadd.wasm`). Deliberately still open:
+multi-value blocks/functions, f32/f64 load/store opcodes, and physical
+deployment to an ESP32/STM32 target (GPIO/LED bindings would register
+through the existing host table).
 
 ## Baseline status (`v0.0.0-baseline`, 2026-10-11)
 
@@ -210,7 +247,7 @@ was deleted. `Plan.md` (referenced above and in Layout) is absent from the
 source dump, so it is not tracked; `PROJECT_ARCHITECTURE.md` (forensic
 analysis found in the dump) is tracked.
 
-Still missing as of this baseline: f32/f64 arithmetic opcodes, `br_table`,
+Still missing as of this baseline (float arithmetic since closed, see above): `br_table`,
 `select`, globals, tables, data section, start section, module validation
 beyond header/sections/imports, fuzzing, CI. Known deviation: a function
 body's trailing `end` byte traps (`WASM_TRAP_CONTROL_STACK_UNDERFLOW` —
