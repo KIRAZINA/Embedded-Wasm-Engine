@@ -425,14 +425,9 @@ int main(int argc, char **argv)
         fprintf(stderr, "error: vm init: %s\n", wasm_trap_str(tr));
         return 1;
     }
-    ec = wasm_instantiate(&g_vm, &mod, &g_reg, &nfuncs);
-    if (ec != WASM_OK) {
-        fprintf(stderr, "error: instantiate: %s\n", wasm_err_str(ec));
-        return 1;
-    }
-    printf("[link] %u function(s)\n", (unsigned)nfuncs);
 
-    /* Optional linear memory (app-owned arena). */
+    /* Optional linear memory (app-owned arena). It must be bound BEFORE
+     * instantiate: data segments are applied to it and start may use it. */
     ec = wasm_get_memory_min(&mod, &mem_min, &mem_present);
     if (ec != WASM_OK) {
         fprintf(stderr, "error: memory section: %s\n", wasm_err_str(ec));
@@ -456,6 +451,14 @@ int main(int argc, char **argv)
         fprintf(stderr, "error: memory bind: %s\n", wasm_trap_str(tr));
         return 1;
     }
+    /* Instantiate: links imports, defines funcs/globals, applies data
+     * segments to the bound memory, then runs the start function. */
+    ec = wasm_instantiate(&g_vm, &mod, &g_reg, &nfuncs);
+    if (ec != WASM_OK) {
+        fprintf(stderr, "error: instantiate: %s\n", wasm_err_str(ec));
+        return 1;
+    }
+    printf("[link] %u function(s)\n", (unsigned)nfuncs);
 
     /* d) Resolve the export. */
     ec = wasm_find_section(&mod, (uint8_t)WASM_SECT_EXPORT, &exsec);

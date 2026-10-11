@@ -32,6 +32,13 @@ wasm_trap_t wasm_vm_init(wasm_vm_t *vm)
         vm->funcs[i].is_host = 0;
         vm->funcs[i].host_cb = NULL;
     }
+    for (i = 0u; i < (uint32_t)WASM_MAX_GLOBALS; i++) {
+        vm->globals[i].value.type = WASM_TYPE_I32;
+        vm->globals[i].value.value.i32 = 0;
+        vm->globals[i].mut = 0;
+        vm->globals[i].valid = 0;
+    }
+    vm->nglobals = 0u;
     return WASM_TRAP_OK;
 }
 
@@ -764,6 +771,8 @@ static wasm_trap_t vm_scan_block(const uint8_t *from, const uint8_t *end,
         case OP_LOCAL_GET:
         case OP_LOCAL_SET:
         case OP_LOCAL_TEE:
+        case OP_GLOBAL_GET:
+        case OP_GLOBAL_SET:
         case OP_CALL:
         case OP_BR:
         case OP_BR_IF:
@@ -1313,6 +1322,40 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
             return wasm_vm_local_set(vm, idx);
         }
         return wasm_vm_local_tee(vm, idx);
+    }
+
+    case OP_GLOBAL_GET: {
+        uint32_t idx = 0u;
+        tr = vm_decode_u32_imm(f, &idx);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (idx >= vm->nglobals || !vm->globals[idx].valid) {
+            return WASM_TRAP_INVALID_ARGUMENT;
+        }
+        return wasm_stack_push(&vm->operands, vm->globals[idx].value);
+    }
+
+    case OP_GLOBAL_SET: {
+        uint32_t idx = 0u;
+        wasm_val_t v;
+        tr = vm_decode_u32_imm(f, &idx);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (idx >= vm->nglobals || !vm->globals[idx].valid) {
+            return WASM_TRAP_INVALID_ARGUMENT;
+        }
+        if (!vm->globals[idx].mut) {
+            return WASM_TRAP_GLOBAL_IMMUTABLE;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands,
+                                  vm->globals[idx].value.type, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        vm->globals[idx].value = v;
+        return WASM_TRAP_OK;
     }
 
     case OP_I32_ADD:

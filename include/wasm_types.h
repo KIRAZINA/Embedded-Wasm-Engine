@@ -37,7 +37,9 @@ typedef enum {
     WASM_ERR_INVALID_SECTION, /* section id out of range */
     WASM_ERR_UNRESOLVED_IMPORT,  /* import has no registered host function */
     WASM_ERR_EXPORT_NOT_FOUND,   /* no export entry matches the given name */
-    WASM_ERR_TYPE_MISMATCH_IMPORT /* import/defined signature the engine cannot honor */
+    WASM_ERR_TYPE_MISMATCH_IMPORT, /* import/defined signature the engine cannot honor */
+    WASM_ERR_DATA_OUT_OF_BOUNDS, /* data segment needs missing/out-of-range memory */
+    WASM_ERR_START_FAILED        /* start function trapped during instantiation */
 } wasm_err_t;
 
 /* Human-readable error name. Zero-alloc: returns string literals. */
@@ -57,6 +59,8 @@ static inline const char *wasm_err_str(wasm_err_t e)
     case WASM_ERR_UNRESOLVED_IMPORT: return "WASM_ERR_UNRESOLVED_IMPORT";
     case WASM_ERR_EXPORT_NOT_FOUND:  return "WASM_ERR_EXPORT_NOT_FOUND";
     case WASM_ERR_TYPE_MISMATCH_IMPORT: return "WASM_ERR_TYPE_MISMATCH_IMPORT";
+    case WASM_ERR_DATA_OUT_OF_BOUNDS: return "WASM_ERR_DATA_OUT_OF_BOUNDS";
+    case WASM_ERR_START_FAILED:      return "WASM_ERR_START_FAILED";
     default:                       return "WASM_ERR_UNKNOWN";
     }
 }
@@ -126,6 +130,18 @@ typedef struct {
 #define WASM_MAX_BR_TABLE_LABELS 256u
 #endif
 
+/* Phase 3 (globals/data): fixed global storage and data-segment staging.
+ * All defaults overridable via -D; see the limits documentation. */
+#ifndef WASM_MAX_GLOBALS
+#define WASM_MAX_GLOBALS 32u
+#endif
+#ifndef WASM_MAX_HOST_GLOBALS
+#define WASM_MAX_HOST_GLOBALS 16u
+#endif
+#ifndef WASM_MAX_DATA_SEGMENTS
+#define WASM_MAX_DATA_SEGMENTS 32u
+#endif
+
 /* Value types supported by WebAssembly MVP (opcode encoding values). */
 typedef enum {
     WASM_TYPE_I32 = 0x7F,
@@ -168,7 +184,8 @@ typedef enum {
     WASM_TRAP_CONTROL_STACK_UNDERFLOW,/* END with no open block */
     WASM_TRAP_INVALID_BLOCK_LABEL,  /* br label >= open block depth */
     WASM_TRAP_ELSE_WITHOUT_IF,      /* ELSE outside an IF then-branch */
-    WASM_TRAP_INVALID_CONVERSION    /* float->int trunc of NaN (out-of-range uses INTEGER_OVERFLOW) */
+    WASM_TRAP_INVALID_CONVERSION,   /* float->int trunc of NaN (out-of-range uses INTEGER_OVERFLOW) */
+    WASM_TRAP_GLOBAL_IMMUTABLE      /* global.set on an immutable global */
 } wasm_trap_t;
 
 /* Human-readable trap name. Zero-alloc: returns string literals. */
@@ -197,6 +214,7 @@ static inline const char *wasm_trap_str(wasm_trap_t t)
     case WASM_TRAP_INVALID_BLOCK_LABEL: return "WASM_TRAP_INVALID_BLOCK_LABEL";
     case WASM_TRAP_ELSE_WITHOUT_IF:     return "WASM_TRAP_ELSE_WITHOUT_IF";
     case WASM_TRAP_INVALID_CONVERSION:  return "WASM_TRAP_INVALID_CONVERSION";
+    case WASM_TRAP_GLOBAL_IMMUTABLE:    return "WASM_TRAP_GLOBAL_IMMUTABLE";
     default:                            return "WASM_TRAP_UNKNOWN";
     }
 }
@@ -229,6 +247,8 @@ typedef enum {
     OP_LOCAL_GET   = 0x20,
     OP_LOCAL_SET   = 0x21,
     OP_LOCAL_TEE   = 0x22,
+    OP_GLOBAL_GET  = 0x23,
+    OP_GLOBAL_SET  = 0x24,
     OP_I32_LOAD    = 0x28,
     OP_I32_STORE   = 0x36,
     OP_I32_CONST   = 0x41,

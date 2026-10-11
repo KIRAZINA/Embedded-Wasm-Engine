@@ -6,7 +6,8 @@
  *
  * Composition: wasm_vm_t = operand stack (Phase 2) + call stack (frames,
  *   each with its own control stack) + borrowed linear memory + a
- *   host-registered function table for OP_CALL interop.
+ *   host-registered function table for OP_CALL interop + a fixed global
+ *   table for OP_GLOBAL_GET/SET (imports first, then defined).
  * Everything owned is pre-allocated inside the struct (~103 KiB: declare
  * `static`). Code bytes and memory backing are always borrowed.
  *
@@ -46,11 +47,22 @@ typedef struct {
     wasm_host_func_t host_cb;
 } wasm_func_desc_t;
 
+/* Global instance: committed value plus mutability. Index space after
+ * instantiate(): imported globals first, then defined ones (mirrors the
+ * function index-space rule that imports precede definitions). */
+typedef struct {
+    wasm_val_t value;
+    int mut;   /* 0 = immutable, 1 = mutable */
+    int valid;
+} wasm_global_t;
+
 typedef struct wasm_vm {
     wasm_stack_t operands;
     wasm_call_stack_t calls;
     wasm_memory_t *mem; /* borrowed linear memory (NULL = unbound) */
     wasm_func_desc_t funcs[WASM_MAX_FUNCTIONS];
+    wasm_global_t globals[WASM_MAX_GLOBALS];
+    uint32_t nglobals;
 } wasm_vm_t;
 
 wasm_trap_t wasm_vm_init(wasm_vm_t *vm);
