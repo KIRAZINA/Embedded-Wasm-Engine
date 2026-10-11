@@ -317,4 +317,33 @@ jobs:
 4. **Native Windows shell untested:** CI runs Windows inside MSYS2 bash (where POSIX `rm` is available). Native Windows PowerShell / CMD environments (which run `mingw32-make` without `rm` on PATH) are untested and fail on `make clean`.
 5. **No Clang sanitizer job on macOS:** Sanitizers are only executed on Ubuntu Linux.
 
+## 6. Spec-runner capability assessment (task 0.6)
+
+Analysis of `tools/run_spec_suite.py`:
+
+### Supported input format
+
+- **Format:** JSON test scripts generated from official `.wast` files via `wast2json` (e.g. `wast2json --spec <file>.wast -o <file>.json`).
+- Raw `.wast` / `.wat` text format is **not supported directly**; translation to JSON and linked `.wasm` binaries must occur before invoking the runner.
+
+### Supported assertion and action types
+
+- `invoke` (action): Maps to `wasm_runner --quiet --result-line <file.wasm> <field> [--arg type:val...]`. Passes if process exits with code 0.
+- `assert_return`: Fully parsed and compared. Handles:
+  - `i32` / `i64`: Compared against decimal / hex values in stdout `RESULT i32/i64 <val>`.
+  - `f32` / `f64`: Bit-exact comparison against hex integer representations.
+  - `nan:canonical` / `nan:arithmetic`: Handled via `nan_bits()` helper by checking exponent and quiet fraction bit patterns.
+- `assert_trap`: Checked by testing for non-zero exit code and `"RESULT trap "` in stdout.
+- `assert_invalid`, `assert_malformed`, `assert_uninstantiable`: Handled by executing `wasm_runner --quiet <file.wasm>` and asserting exit code != 0.
+
+### Missing capabilities vs official WebAssembly JSON spec format
+
+1. **Statefulness across commands:** `run_spec_suite.py` spawns a fresh `wasm_runner` CLI process for every individual assertion. In the WebAssembly spec testsuite, many tests instantiate a module and perform multiple mutating calls (e.g., modifying mutable globals or linear memory). Because `wasm_runner` does not maintain state across invocations, sequential stateful tests cannot pass without an interactive/in-memory session mode.
+2. **`register` command skipped:** Line 118 completely skips `register` (`self.skip_count += 1; return`). Multi-module tests that register one module under an import namespace (e.g. `(register "test")`) and link another module to it cannot be executed.
+3. **`get` action missing:** Only function invocation (`invoke`) is supported. Inspecting exported globals via `get` actions is not implemented.
+4. **`assert_unlinkable` and `assert_exhaustion`:** Not distinctly categorized; fall into a catch-all non-zero return code check without verifying the specific failure reason.
+5. **Trap / Error message verification:** Spec assertions specify exact expected error strings (e.g., `"out of bounds memory access"`, `"integer divide by zero"`). `run_spec_suite.py` only tests process exit code and generic substring `"RESULT trap "`, ignoring the specific trap classification.
+6. **Negative canonical NaN bits:** `nan_bits()` expects canonical float NaN to match exact positive bits `0x7fc00000` (f32) or `0x7ff8000000000000` (f64). The WebAssembly specification allows either sign bit for canonical NaNs (`0xffc00000` is also canonical), which causes false-negative mismatches if the engine preserves a negative sign bit on NaN operations.
+
+
 
