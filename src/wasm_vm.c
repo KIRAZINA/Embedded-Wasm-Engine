@@ -772,6 +772,28 @@ static wasm_trap_t vm_scan_block(const uint8_t *from, const uint8_t *end,
                 return tr;
             }
             break;
+        case OP_BR_TABLE: {
+            /* [count][label x count][default]: (count+1) LEBs, each >= 1
+             * byte. Mirrors step validation (cap + remaining-bytes). */
+            uint32_t n = 0u;
+            uint32_t k;
+            if (leb128_decode_u32(&p, end, &n) != WASM_OK) {
+                return WASM_TRAP_CODE_OVERRUN;
+            }
+            if (n > (uint32_t)WASM_MAX_BR_TABLE_LABELS) {
+                return WASM_TRAP_INVALID_ARGUMENT;
+            }
+            if ((uint64_t)(size_t)(end - p) < (uint64_t)n + 1u) {
+                return WASM_TRAP_CODE_OVERRUN;
+            }
+            for (k = 0u; k < n + 1u; k++) {
+                tr = vm_skip_u32(&p, end);
+                if (tr != WASM_TRAP_OK) {
+                    return tr;
+                }
+            }
+            break;
+        }
         case OP_I32_LOAD:
         case OP_I32_STORE:
             tr = vm_skip_u32(&p, end);
@@ -785,6 +807,7 @@ static wasm_trap_t vm_scan_block(const uint8_t *from, const uint8_t *end,
             break;
         case OP_UNREACHABLE:
         case OP_RETURN:
+        case OP_SELECT:
         case OP_I32_EQZ:
         case OP_I32_EQ:
         case OP_I32_NE:
@@ -1082,6 +1105,93 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
             return vm_do_branch(vm, f, label);
         }
         return WASM_TRAP_OK;
+    }
+
+    case OP_BR_TABLE: {
+        /* [count][label x count][default]: pop unsigned i32 index; take
+         * labels[i] if i < count else the default. Zero allocation: the
+         * walk keeps only the selected label. count > remaining bytes is
+         * malformed (each label costs >= 1 byte); count above
+         * WASM_MAX_BR_TABLE_LABELS is rejected without reading further. */
+        uint32_t count = 0u;
+        uint32_t i;
+        uint32_t idx;
+        uint32_t sel = 0u;
+        wasm_val_t cv;
+        const uint8_t *p;
+        tr = vm_decode_u32_imm(f, &count);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (count > (uint32_t)WASM_MAX_BR_TABLE_LABELS) {
+            return WASM_TRAP_INVALID_ARGUMENT;
+        }
+        if (f->code_ptr == NULL || f->code_end == NULL ||
+            (uint64_t)(size_t)(f->code_end - f->code_ptr) <
+            (uint64_t)count + 1u) {
+            return WASM_TRAP_CODE_OVERRUN;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &cv);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        idx = (uint32_t)cv.value.i32; /* unsigned: 0xFFFFFFFF > any count */
+        p = f->code_ptr;
+        for (i = 0u; i < count; i++) {
+            uint32_t lab = 0u;
+            if (leb128_decode_u32(&p, f->code_end, &lab) != WASM_OK) {
+                return WASM_TRAP_CODE_OVERRUN;
+            }
+            if (i == idx) {
+                sel = lab;
+            }
+        }
+        {
+            uint32_t dflt = 0u;
+            if (leb128_decode_u32(&p, f->code_end, &dflt) != WASM_OK) {
+                return WASM_TRAP_CODE_OVERRUN;
+            }
+            if (idx >= count) {
+                sel = dflt;
+            }
+        }
+        f->code_ptr = p;
+        return vm_do_branch(vm, f, sel);
+    }
+
+    case OP_SELECT: {
+        /* MVP untyped select: stack [v1, v2, cond] (cond on top) ->
+         * v1 if cond != 0 else v2. v1/v2 must share a type; failures
+         * restore the popped prefix so a trapped select leaves the stack
+         * untouched (push-backs always fit: depth only shrank). */
+        wasm_val_t c;
+        wasm_val_t v1;
+        wasm_val_t v2;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &c);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_stack_pop(&vm->operands, &v2);
+        if (tr != WASM_TRAP_OK) {
+            (void)wasm_stack_push(&vm->operands, c);
+            return tr;
+        }
+        tr = wasm_stack_pop(&vm->operands, &v1);
+        if (tr != WASM_TRAP_OK) {
+            (void)wasm_stack_push(&vm->operands, v2);
+            (void)wasm_stack_push(&vm->operands, c);
+            return tr;
+        }
+        if (v1.type != v2.type) {
+            (void)wasm_stack_push(&vm->operands, v1);
+            (void)wasm_stack_push(&vm->operands, v2);
+            (void)wasm_stack_push(&vm->operands, c);
+            return WASM_TRAP_TYPE_MISMATCH;
+        }
+        if (c.value.i32 != 0) {
+            return wasm_stack_push(&vm->operands, v1);
+        }
+        return wasm_stack_push(&vm->operands, v2);
     }
 
     case OP_RETURN: {

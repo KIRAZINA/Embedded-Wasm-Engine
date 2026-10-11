@@ -117,6 +117,15 @@ typedef struct {
 #define WASM_MAX_CONTROL_STACK_DEPTH 32u
 #define WASM_MAX_FUNCTIONS 32u
 
+/* Phase 2 (control-flow completion): longest br_table label vector the
+ * interpreter walks in one step (table labels, excluding the default).
+ * Default 256; override with -DWASM_MAX_BR_TABLE_LABELS=<n>.
+ * Larger tables are rejected as WASM_TRAP_INVALID_ARGUMENT, never read
+ * proportional to an attacker-controlled count. */
+#ifndef WASM_MAX_BR_TABLE_LABELS
+#define WASM_MAX_BR_TABLE_LABELS 256u
+#endif
+
 /* Value types supported by WebAssembly MVP (opcode encoding values). */
 typedef enum {
     WASM_TYPE_I32 = 0x7F,
@@ -212,8 +221,11 @@ typedef enum {
     OP_END         = 0x0B,
     OP_BR          = 0x0C,
     OP_BR_IF       = 0x0D,
+    OP_BR_TABLE    = 0x0E,
     OP_RETURN      = 0x0F,
     OP_CALL        = 0x10,
+    /* 0x1A (drop) is MVP but not implemented; 0x1B select is. */
+    OP_SELECT      = 0x1B,
     OP_LOCAL_GET   = 0x20,
     OP_LOCAL_SET   = 0x21,
     OP_LOCAL_TEE   = 0x22,

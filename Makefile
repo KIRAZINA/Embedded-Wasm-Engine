@@ -1,5 +1,5 @@
 # Baseline Makefile — C11 strict, zero-dependency (libm only for floats).
-# `make all`  : builds wasm_runner + all test binaries (phase1..7, cli).
+# `make all`  : builds wasm_runner + all test binaries (phase1..8, cli).
 # `make test` : builds everything, runs all suites sequentially, prints
 #               per-suite results and a final TOTAL line
 #               ("TOTAL: X passed, Y failed"); non-zero exit on failure.
@@ -18,9 +18,10 @@ T4        = $(BUILD)/test_phase4
 T5        = $(BUILD)/test_phase5
 T6        = $(BUILD)/test_phase6
 T7        = $(BUILD)/test_phase7
+T8        = $(BUILD)/test_phase8
 TCLI      = $(BUILD)/test_cli
 
-all: $(RUNNER) $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(TCLI)
+all: $(RUNNER) $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(T8) $(TCLI)
 
 $(RUNNER): $(SRC) src/main.c
 	mkdir -p $(BUILD)
@@ -58,9 +59,13 @@ $(T7): $(SRC) tests/test_phase7.c
 	mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) $(SRC) tests/test_phase7.c -o $(T7) $(LDLIBS)
 
+$(T8): $(SRC) tests/test_phase8.c
+	mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase8.c -o $(T8) $(LDLIBS)
+
 test: all
 	@pass=0; fail=0; \
-	for t in $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(TCLI); do \
+	for t in $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(T8) $(TCLI); do \
 	  echo "== $$t =="; \
 	  out=`./$$t`; ec=$$?; \
 	  echo "$$out" | tail -n 3; \
@@ -93,6 +98,9 @@ test6: $(T6)
 test7: $(T7)
 	./$(T7)
 
+test8: $(T8)
+	./$(T8)
+
 testcli: $(TCLI)
 	./$(TCLI)
 
@@ -102,4 +110,4 @@ runner: $(RUNNER)
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test1 test2 test3 test4 test5 test6 test7 testcli runner clean
+.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 testcli runner clean
