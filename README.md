@@ -467,3 +467,4 @@ no implicit function-level block), so tool-produced modules must be emitted
 without it, as `demo/add.wasm` already is. Older capacity constants are not
 yet `#ifndef`-guarded (invariant I5 gap, pre-existing); the new
 `WASM_MAX_BR_TABLE_LABELS` is guarded and `-D` overridable.
+# Embedded-Wasm-Engine
