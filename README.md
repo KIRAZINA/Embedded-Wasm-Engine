@@ -32,6 +32,11 @@ anywhere**, verified by audit. All builds are warning-free under
 - **Structured control flow** — `block`/`loop`/`if`/`else`/`end`,
   `br`/`br_if`/`br_table` with relative labels, `return`, `call`,
   `local.get/set/tee`, untyped `select` over i32/i64/f32/f64.
+- **Globals / data / start** - mutable and immutable globals
+  (`global.get`/`global.set`, `const`-only init expressions, imported
+  globals by name), data segments applied to bound memory at
+  instantiation (validate-all-then-copy, never partial), and the start
+  function (`[]->[]` only) executed last at instantiation.
 - **Linear memory** — bounds-checked little-endian `u8/i32/i64/f32/f64`
   loads/stores (unaligned-safe for strict-alignment ARM), page grow with
   zero-filled tails, wraparound-proof offset checks.
@@ -65,11 +70,12 @@ anywhere**, verified by audit. All builds are warning-free under
 ├── src/               # leb128.c, wasm_parser.c, wasm_stack.c, wasm_memory.c,
 │                      #   wasm_frame.c, wasm_control.c, wasm_vm.c,
 │                      #   wasm_host.c, main.c (CLI runner)
-├── tests/             # test_phase1.c … test_phase8.c, test_cli.c (assert-based, no framework)
+├── tests/             # test_phase1.c … test_phase9.c, test_cli.c (assert-based, no framework)
 ├── demo/              # add.wasm (main(a,b)->a+b), print.wasm (host-callback demo),
 │                      #   fadd.wasm (main()->f32 { 1.5 + 2.5 }),
-│                      #   dispatch.wasm (main(i)->i32 dispatch via br_table)
-└── build/             # wasm_runner + 9 test binaries (generated)
+│                      #   dispatch.wasm (main(i)->i32 dispatch via br_table),
+│                      #   hello.wasm (data "Hello" + print loop via env.print_i32)
+└── build/             # wasm_runner + 10 test binaries (generated)
 ```
 
 ## Requirements
@@ -138,6 +144,23 @@ Dispatch demo (`dispatch.wasm` selects 100/200/300 via `br_table`):
 .\build\wasm_runner.exe demo\dispatch.wasm main 2  # result: 300 (i32)
 ```
 
+Data + host-call demo (`hello.wasm` places "Hello" (72,101,108,108,111
+as i32 cells) via a data segment, then loops calling `env.print_i32`):
+
+```powershell
+.\build\wasm_runner.exe demo\hello.wasm main
+# [load] 125 bytes from 'demo\hello.wasm'
+# [parse] header ok
+# [link] 2 function(s)
+# [export] 'main' -> func 1
+# 72
+# 101
+# 108
+# 108
+# 111
+# ok (no result)
+```
+
 Result formats: `result: <int> (i32)`, `result: <int> (i64)`,
 `result: <%.9g> (f32)` (9 significant digits round-trip any f32),
 `result: <%.17g> (f64)` (17 digits round-trip any f64).
@@ -167,7 +190,7 @@ e.g. `WASM_TRAP_DIV_BY_ZERO`), `2` usage/I/O error.
 ## Testing
 
 Standalone `assert`-style suites, no test framework. Current status:
-**1140/1140 passing, 0 failed** (`make test` prints `TOTAL: 1140 passed, 0 failed`).
+**1340/1340 passing, 0 failed** (`make test` prints `TOTAL: 1340 passed, 0 failed`).
 
 | Suite | Coverage | Checks |
 |---|---|---|
@@ -178,6 +201,7 @@ Standalone `assert`-style suites, no test framework. Current status:
 | `test_phase5` | blocks/loops/branches, factorial, `call`/`return` interop | 74 |
 | `test_phase6` | Host callbacks, export lookup, import binding, instantiation, i64 ALU, CLI `--dump` output | 160 |
 | `test_cli` | End-to-end runner runs of hand-built `()->i64` modules, exact `result:` rendering incl. `INT64_MIN` | 15 |
+| `test_phase9` | Global get/set/immutability/init forms/imports, data placement/bounds/caps, start run-once/rejects/host-start, register validation, CLI hello run | 200 |
 | `test_phase8` | br_table all-arms/default/unsigned-index/loop-target/valued-carry/malformed/scanner, select over 4 types incl. NaN/mismatch/underflow, CLI dispatch run | 102 |
 | `test_phase7` | f32/f64 const/arith/sqrt/min-max/abs-neg-copysign/round/nearest/cmp, all 8 trunc boundaries, converts, reinterprets, NaN propagation, memory NaN round-trips, CLI f32 run + dump | 357 |
 
@@ -215,6 +239,9 @@ Standalone `assert`-style suites, no test framework. Current status:
 | Host callbacks | 16 (31-char names) | `WASM_TRAP_INVALID_ARGUMENT` |
 | CLI input file | 64 KiB | usage error |
 | Branch labels | open depth | `WASM_TRAP_INVALID_BLOCK_LABEL` |
+| Globals (imported + defined) | 32 (`WASM_MAX_GLOBALS`, `-D` overridable) | `WASM_ERR_SECTION_OVERFLOW` |
+| Host-provided globals | 16 (`WASM_MAX_HOST_GLOBALS`, `-D` overridable) | `WASM_TRAP_INVALID_ARGUMENT` |
+| Data segments | 32 (`WASM_MAX_DATA_SEGMENTS`, `-D` overridable) | `WASM_ERR_SECTION_OVERFLOW` |
 | br_table labels | 256 (`WASM_MAX_BR_TABLE_LABELS`, `-D` overridable) | `WASM_TRAP_INVALID_ARGUMENT` |
 
 ## Memory footprint
@@ -235,10 +262,12 @@ cost plus whatever arena it provisions.
 Phases 1–4 of the plan are implemented (delivered as six incremental phases
 here); host integration works through the generic callback registry, proven
 with `print_i32`. The f32/f64 arithmetic gap is closed (Phase 1 float work,
-proven by `test_phase7` + `demo/fadd.wasm`). Deliberately still open:
-multi-value blocks/functions, f32/f64 load/store opcodes, and physical
-deployment to an ESP32/STM32 target (GPIO/LED bindings would register
-through the existing host table).
+proven by `test_phase7` + `demo/fadd.wasm`). Globals, data segments, and
+the start function are implemented (Phase 3 work, proven by `test_phase9`
++ `demo/hello.wasm`). Deliberately still open:
+multi-value blocks/functions, f32/f64 load/store opcodes, tables, and
+physical deployment to an ESP32/STM32 target (GPIO/LED bindings would
+register through the existing host table).
 
 ## Baseline status (`v0.0.0-baseline`, 2026-10-11)
 
@@ -258,9 +287,9 @@ was deleted. `Plan.md` (referenced above and in Layout) is absent from the
 source dump, so it is not tracked; `PROJECT_ARCHITECTURE.md` (forensic
 analysis found in the dump) is tracked.
 
-Still missing as of this baseline (float arithmetic and br_table/select
-since closed, see above):
-globals, tables, data section, start section, module validation
+Still missing as of this baseline (float arithmetic, br_table/select,
+globals, data, and start since closed, see above):
+tables, module validation
 beyond header/sections/imports, fuzzing, CI. Known deviation: a function
 body's trailing `end` byte traps (`WASM_TRAP_CONTROL_STACK_UNDERFLOW` —
 no implicit function-level block), so tool-produced modules must be emitted
