@@ -675,8 +675,11 @@ static wasm_err_t check_data_bounds(const wasm_memory_t *mem, uint32_t offset,
     return WASM_OK;
 }
 
-/* Parse one data segment header at *pp: memidx==0, i32 offset expr, bytes.
- * Returns offset/len and borrows the byte window via *out_bytes. */
+/* Parse one data segment header at *pp: memidx==0, i32 offset expr, length.
+ * The byte window is borrowed via *out_bytes WITHOUT advancing past it;
+ * callers advance *pp by len themselves after their own checks. This lets
+ * pass 1 report bounds failures (DATA_OUT_OF_BOUNDS) even when the file
+ * is also too short to contain the bytes. */
 static wasm_err_t parse_data_seg(const uint8_t **pp, const uint8_t *end,
                                  const wasm_vm_t *vm, uint32_t nimportglobals,
                                  uint32_t *out_offset, uint32_t *out_len,
@@ -705,13 +708,9 @@ static wasm_err_t parse_data_seg(const uint8_t **pp, const uint8_t *end,
     if (rc != WASM_OK) {
         return rc;
     }
-    if (!readable(*pp, end, len)) {
-        return WASM_ERR_TRUNCATED;
-    }
     *out_offset = (uint32_t)off.value.i32;
     *out_len = len;
     *out_bytes = *pp;
-    *pp += len;
     return WASM_OK;
 }
 
@@ -747,6 +746,13 @@ static wasm_err_t apply_data(wasm_vm_t *vm, const wasm_slice_t *datap,
         if (rc != WASM_OK) {
             return rc;
         }
+        if (!readable(cur, end, len)) {
+            return WASM_ERR_TRUNCATED;
+        }
+        cur += len;
+    }
+    if (cur != end) {
+        return WASM_ERR_INVALID_SECTION; /* trailing bytes */
     }
     /* Pass 2: re-walk (deterministic: pass 1 accepted every segment)
      * and copy in section order, so later segments overwrite earlier. */
@@ -766,6 +772,7 @@ static wasm_err_t apply_data(wasm_vm_t *vm, const wasm_slice_t *datap,
         if (len > 0u) {
             memcpy(&vm->mem->bytes[offset], bytes, len);
         }
+        cur += len;
     }
     return WASM_OK;
 }
