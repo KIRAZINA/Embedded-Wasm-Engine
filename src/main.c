@@ -109,10 +109,12 @@ static void print_val(const wasm_val_t *v)
         print_i64(v->value.i64);
         break;
     case WASM_TYPE_F32:
-        printf("result: %f (f32)\n", (double)v->value.f32);
+        /* %.9g round-trips any f32; nan/inf print as such (C99). */
+        printf("result: %.9g (f32)\n", (double)v->value.f32);
         break;
     case WASM_TYPE_F64:
-        printf("result: %f (f64)\n", v->value.f64);
+        /* %.17g round-trips any f64. */
+        printf("result: %.17g (f64)\n", v->value.f64);
         break;
     default:
         printf("result: <unknown type 0x%02x>\n", (unsigned)v->type);

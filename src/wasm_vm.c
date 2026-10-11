@@ -5,6 +5,7 @@
 
 #include "wasm_vm.h"
 
+#include <math.h>
 #include <string.h>
 
 #include "leb128.h"
@@ -299,6 +300,288 @@ static wasm_trap_t vm_pop2_i64(wasm_vm_t *vm, int64_t *a, int64_t *b)
     return WASM_TRAP_OK;
 }
 
+/* Pop two F32 operands (b = top). Restores b if the second pop fails. */
+static wasm_trap_t vm_pop2_f32(wasm_vm_t *vm, float *a, float *b)
+{
+    wasm_val_t va;
+    wasm_val_t vb;
+    wasm_trap_t tr;
+    tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F32, &vb);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F32, &va);
+    if (tr != WASM_TRAP_OK) {
+        (void)wasm_stack_push(&vm->operands, vb);
+        return tr;
+    }
+    *a = va.value.f32;
+    *b = vb.value.f32;
+    return WASM_TRAP_OK;
+}
+
+/* Pop two F64 operands (b = top). Restores b if the second pop fails. */
+static wasm_trap_t vm_pop2_f64(wasm_vm_t *vm, double *a, double *b)
+{
+    wasm_val_t va;
+    wasm_val_t vb;
+    wasm_trap_t tr;
+    tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F64, &vb);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F64, &va);
+    if (tr != WASM_TRAP_OK) {
+        (void)wasm_stack_push(&vm->operands, vb);
+        return tr;
+    }
+    *a = va.value.f64;
+    *b = vb.value.f64;
+    return WASM_TRAP_OK;
+}
+
+static wasm_trap_t vm_push_f32(wasm_vm_t *vm, float v)
+{
+    wasm_val_t x;
+    x.type = WASM_TYPE_F32;
+    x.value.f32 = v;
+    return wasm_stack_push(&vm->operands, x);
+}
+
+static wasm_trap_t vm_push_f64(wasm_vm_t *vm, double v)
+{
+    wasm_val_t x;
+    x.type = WASM_TYPE_F64;
+    x.value.f64 = v;
+    return wasm_stack_push(&vm->operands, x);
+}
+
+/* ================= Float bit-pattern helpers (S6) =================
+ * abs/neg/copysign/reinterpret never inspect float VALUE; they move bits
+ * through unsigned integers via memcpy (no aliasing UB, no comparisons). */
+
+static uint32_t vm_f32_bits(float v)
+{
+    uint32_t u;
+    memcpy(&u, &v, sizeof(u));
+    return u;
+}
+
+static float vm_bits_f32(uint32_t u)
+{
+    float v;
+    memcpy(&v, &u, sizeof(v));
+    return v;
+}
+
+static uint64_t vm_f64_bits(double v)
+{
+    uint64_t u;
+    memcpy(&u, &v, sizeof(u));
+    return u;
+}
+
+static double vm_bits_f64(uint64_t u)
+{
+    double v;
+    memcpy(&v, &u, sizeof(v));
+    return v;
+}
+
+/* Canonical quiet NaNs emitted by min/max on NaN input (S2/S7).
+ * Arithmetic (add/div/sqrt/...) propagates whatever NaN the host C
+ * arithmetic produces; only min/max canonicalize, per spec latitude. */
+#define VM_F32_CANON_NAN_BITS 0x7FC00000u
+#define VM_F64_CANON_NAN_BITS 0x7FF8000000000000ULL
+
+static float vm_f32_canon_nan(void)
+{
+    return vm_bits_f32((uint32_t)VM_F32_CANON_NAN_BITS);
+}
+
+static double vm_f64_canon_nan(void)
+{
+    return vm_bits_f64((uint64_t)VM_F64_CANON_NAN_BITS);
+}
+
+/* ================= WASM min/max (S2) =================
+ * Hand-rolled: C fminf/fmaxf have the wrong NaN and signed-zero behavior.
+ * NaN in either operand -> canonical quiet NaN; min(+0,-0) = -0 (and the
+ * mirror); otherwise the C comparison result. */
+
+static float vm_f32_min(float a, float b)
+{
+    uint32_t ua;
+    uint32_t ub;
+    if (isnan(a) || isnan(b)) {
+        return vm_f32_canon_nan();
+    }
+    if (a == b) {
+        ua = vm_f32_bits(a);
+        ub = vm_f32_bits(b);
+        if (ua == 0x80000000u || ub == 0x80000000u) {
+            return vm_bits_f32(0x80000000u); /* min(+0,-0) = -0 */
+        }
+        return a;
+    }
+    return (a < b) ? a : b;
+}
+
+static float vm_f32_max(float a, float b)
+{
+    uint32_t ua;
+    uint32_t ub;
+    if (isnan(a) || isnan(b)) {
+        return vm_f32_canon_nan();
+    }
+    if (a == b) {
+        ua = vm_f32_bits(a);
+        ub = vm_f32_bits(b);
+        if (ua == 0x00000000u || ub == 0x00000000u) {
+            return vm_bits_f32(0x00000000u); /* max(+0,-0) = +0 */
+        }
+        return a;
+    }
+    return (a > b) ? a : b;
+}
+
+static double vm_f64_min(double a, double b)
+{
+    uint64_t ua;
+    uint64_t ub;
+    if (isnan(a) || isnan(b)) {
+        return vm_f64_canon_nan();
+    }
+    if (a == b) {
+        ua = vm_f64_bits(a);
+        ub = vm_f64_bits(b);
+        if (ua == 0x8000000000000000ULL || ub == 0x8000000000000000ULL) {
+            return vm_bits_f64(0x8000000000000000ULL);
+        }
+        return a;
+    }
+    return (a < b) ? a : b;
+}
+
+static double vm_f64_max(double a, double b)
+{
+    uint64_t ua;
+    uint64_t ub;
+    if (isnan(a) || isnan(b)) {
+        return vm_f64_canon_nan();
+    }
+    if (a == b) {
+        ua = vm_f64_bits(a);
+        ub = vm_f64_bits(b);
+        if (ua == 0x0000000000000000ULL || ub == 0x0000000000000000ULL) {
+            return vm_bits_f64(0x0000000000000000ULL);
+        }
+        return a;
+    }
+    return (a > b) ? a : b;
+}
+
+/* ================= roundTiesToEven (S3) =================
+ * Hand-rolled: C round() rounds half away from zero (wrong for WASM) and
+ * rint()/nearbyint() depend on the ambient rounding mode. Values with
+ * |x| >= 2^23 (f32) / 2^52 (f64) are already integral (or infinite/NaN);
+ * below that the truncated value fits a signed int exactly, so the
+ * even/odd tie decision is exact. NaN/Inf/+-0 pass through untouched. */
+
+static float vm_f32_nearest(float x)
+{
+    float t;
+    float d;
+    float s;
+    int32_t ti;
+    if (isnan(x) || x == 0.0f) {
+        return x;
+    }
+    if (!(x > -8388608.0f && x < 8388608.0f)) { /* |x| >= 2^23 or Inf */
+        return x;
+    }
+    t = truncf(x);
+    d = x - t;
+    if (d > -0.5f && d < 0.5f) {
+        return t;
+    }
+    s = (d > 0.0f) ? 1.0f : -1.0f;
+    if (d == 0.5f || d == -0.5f) {
+        ti = (int32_t)t;
+        if ((ti & 1) == 0) {
+            return t;
+        }
+        return t + s;
+    }
+    return t + s;
+}
+
+static double vm_f64_nearest(double x)
+{
+    double t;
+    double d;
+    double s;
+    int64_t ti;
+    if (isnan(x) || x == 0.0) {
+        return x;
+    }
+    if (!(x > -4503599627370496.0 && x < 4503599627370496.0)) {
+        return x; /* |x| >= 2^52 or Inf */
+    }
+    t = trunc(x);
+    d = x - t;
+    if (d > -0.5 && d < 0.5) {
+        return t;
+    }
+    s = (d > 0.0) ? 1.0 : -1.0;
+    if (d == 0.5 || d == -0.5) {
+        ti = (int64_t)t;
+        if ((ti & 1) == 0) {
+            return t;
+        }
+        return t + s;
+    }
+    return t + s;
+}
+
+/* Decode a raw little-endian float immediate (f32.const/f64.const).
+ * Unlike LEB128 immediates these are fixed 4/8 raw bytes. */
+static wasm_trap_t vm_decode_raw_u32(wasm_frame_t *f, uint32_t *out)
+{
+    unsigned k;
+    uint32_t u = 0u;
+    if (f->code_ptr == NULL || f->code_end == NULL) {
+        return WASM_TRAP_CODE_OVERRUN;
+    }
+    if ((uint64_t)(size_t)(f->code_end - f->code_ptr) < 4u) {
+        return WASM_TRAP_CODE_OVERRUN;
+    }
+    for (k = 0u; k < 4u; k++) {
+        u |= ((uint32_t)f->code_ptr[k]) << (8u * k);
+    }
+    f->code_ptr += 4;
+    *out = u;
+    return WASM_TRAP_OK;
+}
+
+static wasm_trap_t vm_decode_raw_u64(wasm_frame_t *f, uint64_t *out)
+{
+    unsigned k;
+    uint64_t u = 0u;
+    if (f->code_ptr == NULL || f->code_end == NULL) {
+        return WASM_TRAP_CODE_OVERRUN;
+    }
+    if ((uint64_t)(size_t)(f->code_end - f->code_ptr) < 8u) {
+        return WASM_TRAP_CODE_OVERRUN;
+    }
+    for (k = 0u; k < 8u; k++) {
+        u |= ((uint64_t)f->code_ptr[k]) << (8u * k);
+    }
+    f->code_ptr += 8;
+    *out = u;
+    return WASM_TRAP_OK;
+}
+
 wasm_trap_t wasm_vm_bind_memory(wasm_vm_t *vm, wasm_memory_t *mem)
 {
     if (vm == NULL) {
@@ -461,6 +744,23 @@ static wasm_trap_t vm_scan_block(const uint8_t *from, const uint8_t *end,
                 return tr;
             }
             break;
+        case OP_F32_CONST:
+            /* Fixed 4-byte raw LE immediate: skip blind so embedded
+             * 0x05/0x0B payload bytes can never false-positive. */
+            if (p == NULL || end == NULL || p > end ||
+                (uint64_t)(size_t)(end - p) < 4u) {
+                return WASM_TRAP_CODE_OVERRUN;
+            }
+            p += 4;
+            break;
+        case OP_F64_CONST:
+            /* Fixed 8-byte raw LE immediate (same rationale). */
+            if (p == NULL || end == NULL || p > end ||
+                (uint64_t)(size_t)(end - p) < 8u) {
+                return WASM_TRAP_CODE_OVERRUN;
+            }
+            p += 8;
+            break;
         case OP_LOCAL_GET:
         case OP_LOCAL_SET:
         case OP_LOCAL_TEE:
@@ -522,6 +822,68 @@ static wasm_trap_t vm_scan_block(const uint8_t *from, const uint8_t *end,
         case OP_I64_SHL:
         case OP_I64_SHR_S:
         case OP_I64_SHR_U:
+        case OP_F32_EQ:
+        case OP_F32_NE:
+        case OP_F32_LT:
+        case OP_F32_GT:
+        case OP_F32_LE:
+        case OP_F32_GE:
+        case OP_F64_EQ:
+        case OP_F64_NE:
+        case OP_F64_LT:
+        case OP_F64_GT:
+        case OP_F64_LE:
+        case OP_F64_GE:
+        case OP_F32_ABS:
+        case OP_F32_NEG:
+        case OP_F32_CEIL:
+        case OP_F32_FLOOR:
+        case OP_F32_TRUNC:
+        case OP_F32_NEAREST:
+        case OP_F32_SQRT:
+        case OP_F32_ADD:
+        case OP_F32_SUB:
+        case OP_F32_MUL:
+        case OP_F32_DIV:
+        case OP_F32_MIN:
+        case OP_F32_MAX:
+        case OP_F32_COPYSIGN:
+        case OP_F64_ABS:
+        case OP_F64_NEG:
+        case OP_F64_CEIL:
+        case OP_F64_FLOOR:
+        case OP_F64_TRUNC:
+        case OP_F64_NEAREST:
+        case OP_F64_SQRT:
+        case OP_F64_ADD:
+        case OP_F64_SUB:
+        case OP_F64_MUL:
+        case OP_F64_DIV:
+        case OP_F64_MIN:
+        case OP_F64_MAX:
+        case OP_F64_COPYSIGN:
+        case OP_I32_TRUNC_F32_S:
+        case OP_I32_TRUNC_F32_U:
+        case OP_I32_TRUNC_F64_S:
+        case OP_I32_TRUNC_F64_U:
+        case OP_I64_TRUNC_F32_S:
+        case OP_I64_TRUNC_F32_U:
+        case OP_I64_TRUNC_F64_S:
+        case OP_I64_TRUNC_F64_U:
+        case OP_F32_CONVERT_I32_S:
+        case OP_F32_CONVERT_I32_U:
+        case OP_F32_CONVERT_I64_S:
+        case OP_F32_CONVERT_I64_U:
+        case OP_F32_DEMOTE_F64:
+        case OP_F64_CONVERT_I32_S:
+        case OP_F64_CONVERT_I32_U:
+        case OP_F64_CONVERT_I64_S:
+        case OP_F64_CONVERT_I64_U:
+        case OP_F64_PROMOTE_F32:
+        case OP_I32_REINTERPRET_F32:
+        case OP_I64_REINTERPRET_F64:
+        case OP_F32_REINTERPRET_I32:
+        case OP_F64_REINTERPRET_I64:
             break; /* fixed one-byte instructions */
         default:
             return WASM_TRAP_UNKNOWN_OPCODE;
@@ -808,6 +1170,24 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
         return vm_push_i64(vm, v);
     }
 
+    case OP_F32_CONST: {
+        uint32_t u = 0u;
+        tr = vm_decode_raw_u32(f, &u);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_f32(vm, vm_bits_f32(u)); /* bit-exact, NaN-safe */
+    }
+
+    case OP_F64_CONST: {
+        uint64_t u = 0u;
+        tr = vm_decode_raw_u64(f, &u);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_f64(vm, vm_bits_f64(u)); /* bit-exact, NaN-safe */
+    }
+
     case OP_LOCAL_GET:
     case OP_LOCAL_SET:
     case OP_LOCAL_TEE: {
@@ -995,6 +1375,519 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
             }
             return vm_push_i64(vm, vm_u2s64(r));
         }
+    }
+
+    /* ================= Float arithmetic (IEEE-754; S1: float division by
+     * zero is NOT a trap — the C operator yields +-Inf/NaN per IEEE) ====== */
+
+    case OP_F32_ADD:
+    case OP_F32_SUB:
+    case OP_F32_MUL:
+    case OP_F32_DIV: {
+        float a = 0.0f, b = 0.0f;
+        tr = vm_pop2_f32(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (op == OP_F32_ADD) {
+            return vm_push_f32(vm, a + b);
+        }
+        if (op == OP_F32_SUB) {
+            return vm_push_f32(vm, a - b);
+        }
+        if (op == OP_F32_MUL) {
+            return vm_push_f32(vm, a * b);
+        }
+        return vm_push_f32(vm, a / b);
+    }
+
+    case OP_F64_ADD:
+    case OP_F64_SUB:
+    case OP_F64_MUL:
+    case OP_F64_DIV: {
+        double a = 0.0, b = 0.0;
+        tr = vm_pop2_f64(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (op == OP_F64_ADD) {
+            return vm_push_f64(vm, a + b);
+        }
+        if (op == OP_F64_SUB) {
+            return vm_push_f64(vm, a - b);
+        }
+        if (op == OP_F64_MUL) {
+            return vm_push_f64(vm, a * b);
+        }
+        return vm_push_f64(vm, a / b);
+    }
+
+    case OP_F32_SQRT: {
+        wasm_val_t v;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_f32(vm, sqrtf(v.value.f32)); /* S5: sqrt(neg) = NaN */
+    }
+
+    case OP_F64_SQRT: {
+        wasm_val_t v;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_f64(vm, sqrt(v.value.f64)); /* S5: sqrt(neg) = NaN */
+    }
+
+    case OP_F32_MIN:
+    case OP_F32_MAX: {
+        float a = 0.0f, b = 0.0f;
+        tr = vm_pop2_f32(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (op == OP_F32_MIN) {
+            return vm_push_f32(vm, vm_f32_min(a, b));
+        }
+        return vm_push_f32(vm, vm_f32_max(a, b));
+    }
+
+    case OP_F64_MIN:
+    case OP_F64_MAX: {
+        double a = 0.0, b = 0.0;
+        tr = vm_pop2_f64(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (op == OP_F64_MIN) {
+            return vm_push_f64(vm, vm_f64_min(a, b));
+        }
+        return vm_push_f64(vm, vm_f64_max(a, b));
+    }
+
+    /* S6: sign-bit ops touch only bit patterns, never float values. */
+    case OP_F32_ABS:
+    case OP_F32_NEG: {
+        wasm_val_t v;
+        uint32_t u;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        u = vm_f32_bits(v.value.f32);
+        if (op == OP_F32_ABS) {
+            u &= (uint32_t)0x7FFFFFFFu;
+        } else {
+            u ^= (uint32_t)0x80000000u;
+        }
+        return vm_push_f32(vm, vm_bits_f32(u));
+    }
+
+    case OP_F64_ABS:
+    case OP_F64_NEG: {
+        wasm_val_t v;
+        uint64_t u;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        u = vm_f64_bits(v.value.f64);
+        if (op == OP_F64_ABS) {
+            u &= (uint64_t)0x7FFFFFFFFFFFFFFFULL;
+        } else {
+            u ^= (uint64_t)0x8000000000000000ULL;
+        }
+        return vm_push_f64(vm, vm_bits_f64(u));
+    }
+
+    case OP_F32_CEIL:
+    case OP_F32_FLOOR:
+    case OP_F32_TRUNC: {
+        wasm_val_t v;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (op == OP_F32_CEIL) {
+            return vm_push_f32(vm, ceilf(v.value.f32));
+        }
+        if (op == OP_F32_FLOOR) {
+            return vm_push_f32(vm, floorf(v.value.f32));
+        }
+        return vm_push_f32(vm, truncf(v.value.f32));
+    }
+
+    case OP_F64_CEIL:
+    case OP_F64_FLOOR:
+    case OP_F64_TRUNC: {
+        wasm_val_t v;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (op == OP_F64_CEIL) {
+            return vm_push_f64(vm, ceil(v.value.f64));
+        }
+        if (op == OP_F64_FLOOR) {
+            return vm_push_f64(vm, floor(v.value.f64));
+        }
+        return vm_push_f64(vm, trunc(v.value.f64));
+    }
+
+    case OP_F32_NEAREST: {
+        wasm_val_t v;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_f32(vm, vm_f32_nearest(v.value.f32));
+    }
+
+    case OP_F64_NEAREST: {
+        wasm_val_t v;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_f64(vm, vm_f64_nearest(v.value.f64));
+    }
+
+    case OP_F32_COPYSIGN: {
+        float a = 0.0f, b = 0.0f;
+        uint32_t ua;
+        uint32_t ub;
+        tr = vm_pop2_f32(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        ua = vm_f32_bits(a);
+        ub = vm_f32_bits(b);
+        ua = (ua & (uint32_t)0x7FFFFFFFu) | (ub & (uint32_t)0x80000000u);
+        return vm_push_f32(vm, vm_bits_f32(ua));
+    }
+
+    case OP_F64_COPYSIGN: {
+        double a = 0.0, b = 0.0;
+        uint64_t ua;
+        uint64_t ub;
+        tr = vm_pop2_f64(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        ua = vm_f64_bits(a);
+        ub = vm_f64_bits(b);
+        ua = (ua & (uint64_t)0x7FFFFFFFFFFFFFFFULL) |
+             (ub & (uint64_t)0x8000000000000000ULL);
+        return vm_push_f64(vm, vm_bits_f64(ua));
+    }
+
+    /* Float comparisons: C relational semantics already match WASM
+     * (any ordered comparison with NaN is false; ne is true). Result i32. */
+    case OP_F32_EQ:
+    case OP_F32_NE:
+    case OP_F32_LT:
+    case OP_F32_GT:
+    case OP_F32_LE:
+    case OP_F32_GE: {
+        float a = 0.0f, b = 0.0f;
+        int cond = 0;
+        tr = vm_pop2_f32(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        switch (op) {
+        case OP_F32_EQ: cond = (a == b); break;
+        case OP_F32_NE: cond = (a != b); break;
+        case OP_F32_LT: cond = (a < b); break;
+        case OP_F32_GT: cond = (a > b); break;
+        case OP_F32_LE: cond = (a <= b); break;
+        default:        cond = (a >= b); break; /* OP_F32_GE */
+        }
+        return vm_push_bool(vm, cond);
+    }
+
+    case OP_F64_EQ:
+    case OP_F64_NE:
+    case OP_F64_LT:
+    case OP_F64_GT:
+    case OP_F64_LE:
+    case OP_F64_GE: {
+        double a = 0.0, b = 0.0;
+        int cond = 0;
+        tr = vm_pop2_f64(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        switch (op) {
+        case OP_F64_EQ: cond = (a == b); break;
+        case OP_F64_NE: cond = (a != b); break;
+        case OP_F64_LT: cond = (a < b); break;
+        case OP_F64_GT: cond = (a > b); break;
+        case OP_F64_LE: cond = (a <= b); break;
+        default:        cond = (a >= b); break; /* OP_F64_GE */
+        }
+        return vm_push_bool(vm, cond);
+    }
+
+    /* ================= Truncating float->int conversions (S4) ================
+     * NaN -> INVALID_CONVERSION; out-of-range -> INTEGER_OVERFLOW. Boundary
+     * constants are exact powers of two: comparisons below use < low (low
+     * itself is valid) and >= high (high itself already overflows). The C
+     * cast is only reached in-range, so it is always defined. */
+
+    case OP_I32_TRUNC_F32_S: {
+        wasm_val_t v;
+        float x;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        x = v.value.f32;
+        if (isnan(x)) {
+            return WASM_TRAP_INVALID_CONVERSION;
+        }
+        if (x < -2147483648.0f || x >= 2147483648.0f) {
+            return WASM_TRAP_INTEGER_OVERFLOW;
+        }
+        return vm_push_i32(vm, (int32_t)x);
+    }
+
+    case OP_I32_TRUNC_F32_U: {
+        wasm_val_t v;
+        float x;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        x = v.value.f32;
+        if (isnan(x)) {
+            return WASM_TRAP_INVALID_CONVERSION;
+        }
+        if (x < 0.0f || x >= 4294967296.0f) {
+            return WASM_TRAP_INTEGER_OVERFLOW;
+        }
+        return vm_push_i32(vm, vm_u2s((uint32_t)x));
+    }
+
+    case OP_I32_TRUNC_F64_S: {
+        wasm_val_t v;
+        double x;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        x = v.value.f64;
+        if (isnan(x)) {
+            return WASM_TRAP_INVALID_CONVERSION;
+        }
+        if (x < -2147483648.0 || x >= 2147483648.0) {
+            return WASM_TRAP_INTEGER_OVERFLOW;
+        }
+        return vm_push_i32(vm, (int32_t)x);
+    }
+
+    case OP_I32_TRUNC_F64_U: {
+        wasm_val_t v;
+        double x;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        x = v.value.f64;
+        if (isnan(x)) {
+            return WASM_TRAP_INVALID_CONVERSION;
+        }
+        if (x < 0.0 || x >= 4294967296.0) {
+            return WASM_TRAP_INTEGER_OVERFLOW;
+        }
+        return vm_push_i32(vm, vm_u2s((uint32_t)x));
+    }
+
+    case OP_I64_TRUNC_F32_S: {
+        wasm_val_t v;
+        float x;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        x = v.value.f32;
+        if (isnan(x)) {
+            return WASM_TRAP_INVALID_CONVERSION;
+        }
+        if (x < -9223372036854775808.0f || x >= 9223372036854775808.0f) {
+            return WASM_TRAP_INTEGER_OVERFLOW;
+        }
+        return vm_push_i64(vm, (int64_t)x);
+    }
+
+    case OP_I64_TRUNC_F32_U: {
+        wasm_val_t v;
+        float x;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        x = v.value.f32;
+        if (isnan(x)) {
+            return WASM_TRAP_INVALID_CONVERSION;
+        }
+        if (x < 0.0f || x >= 18446744073709551616.0f) {
+            return WASM_TRAP_INTEGER_OVERFLOW;
+        }
+        return vm_push_i64(vm, vm_u2s64((uint64_t)x));
+    }
+
+    case OP_I64_TRUNC_F64_S: {
+        wasm_val_t v;
+        double x;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        x = v.value.f64;
+        if (isnan(x)) {
+            return WASM_TRAP_INVALID_CONVERSION;
+        }
+        if (x < -9223372036854775808.0 || x >= 9223372036854775808.0) {
+            return WASM_TRAP_INTEGER_OVERFLOW;
+        }
+        return vm_push_i64(vm, (int64_t)x);
+    }
+
+    case OP_I64_TRUNC_F64_U: {
+        wasm_val_t v;
+        double x;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        x = v.value.f64;
+        if (isnan(x)) {
+            return WASM_TRAP_INVALID_CONVERSION;
+        }
+        if (x < 0.0 || x >= 18446744073709551616.0) {
+            return WASM_TRAP_INTEGER_OVERFLOW;
+        }
+        return vm_push_i64(vm, vm_u2s64((uint64_t)x));
+    }
+
+    /* int->float: C casts round per the ambient (default ties-to-even) mode,
+     * matching the spec conversion. f64_CPROMOTE is exact; demote may
+     * overflow to Inf or produce NaN, both per IEEE. */
+    case OP_F32_CONVERT_I32_S:
+    case OP_F32_CONVERT_I32_U:
+    case OP_F32_CONVERT_I64_S:
+    case OP_F32_CONVERT_I64_U: {
+        wasm_val_t v;
+        int is64 = (op == OP_F32_CONVERT_I64_S || op == OP_F32_CONVERT_I64_U);
+        int uns = (op == OP_F32_CONVERT_I32_U || op == OP_F32_CONVERT_I64_U);
+        if (is64) {
+            int64_t a = 0;
+            wasm_val_t w;
+            tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I64, &w);
+            if (tr != WASM_TRAP_OK) {
+                return tr;
+            }
+            a = w.value.i64;
+            if (uns) {
+                return vm_push_f32(vm, (float)(uint64_t)a);
+            }
+            return vm_push_f32(vm, (float)a);
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (uns) {
+            return vm_push_f32(vm, (float)(uint32_t)v.value.i32);
+        }
+        return vm_push_f32(vm, (float)v.value.i32);
+    }
+
+    case OP_F64_CONVERT_I32_S:
+    case OP_F64_CONVERT_I32_U:
+    case OP_F64_CONVERT_I64_S:
+    case OP_F64_CONVERT_I64_U: {
+        wasm_val_t v;
+        int is64 = (op == OP_F64_CONVERT_I64_S || op == OP_F64_CONVERT_I64_U);
+        int uns = (op == OP_F64_CONVERT_I32_U || op == OP_F64_CONVERT_I64_U);
+        if (is64) {
+            int64_t a = 0;
+            wasm_val_t w;
+            tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I64, &w);
+            if (tr != WASM_TRAP_OK) {
+                return tr;
+            }
+            a = w.value.i64;
+            if (uns) {
+                return vm_push_f64(vm, (double)(uint64_t)a);
+            }
+            return vm_push_f64(vm, (double)a);
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (uns) {
+            return vm_push_f64(vm, (double)(uint32_t)v.value.i32);
+        }
+        return vm_push_f64(vm, (double)v.value.i32);
+    }
+
+    case OP_F32_DEMOTE_F64: {
+        wasm_val_t v;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_f32(vm, (float)v.value.f64);
+    }
+
+    case OP_F64_PROMOTE_F32: {
+        wasm_val_t v;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_f64(vm, (double)v.value.f32);
+    }
+
+    /* S6: reinterprets move raw bits; NaN payloads survive untouched. */
+    case OP_I32_REINTERPRET_F32: {
+        wasm_val_t v;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_i32(vm, vm_u2s(vm_f32_bits(v.value.f32)));
+    }
+
+    case OP_I64_REINTERPRET_F64: {
+        wasm_val_t v;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_i64(vm, vm_u2s64(vm_f64_bits(v.value.f64)));
+    }
+
+    case OP_F32_REINTERPRET_I32: {
+        wasm_val_t v;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_f32(vm, vm_bits_f32((uint32_t)v.value.i32));
+    }
+
+    case OP_F64_REINTERPRET_I64: {
+        wasm_val_t v;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_f64(vm, vm_bits_f64((uint64_t)v.value.i64));
     }
 
     case OP_I32_EQZ: {

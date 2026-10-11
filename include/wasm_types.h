@@ -158,7 +158,8 @@ typedef enum {
     WASM_TRAP_CONTROL_STACK_OVERFLOW, /* block nesting >= MAX_CONTROL_DEPTH */
     WASM_TRAP_CONTROL_STACK_UNDERFLOW,/* END with no open block */
     WASM_TRAP_INVALID_BLOCK_LABEL,  /* br label >= open block depth */
-    WASM_TRAP_ELSE_WITHOUT_IF       /* ELSE outside an IF then-branch */
+    WASM_TRAP_ELSE_WITHOUT_IF,      /* ELSE outside an IF then-branch */
+    WASM_TRAP_INVALID_CONVERSION    /* float->int trunc of NaN (out-of-range uses INTEGER_OVERFLOW) */
 } wasm_trap_t;
 
 /* Human-readable trap name. Zero-alloc: returns string literals. */
@@ -186,6 +187,7 @@ static inline const char *wasm_trap_str(wasm_trap_t t)
     case WASM_TRAP_CONTROL_STACK_UNDERFLOW: return "WASM_TRAP_CONTROL_STACK_UNDERFLOW";
     case WASM_TRAP_INVALID_BLOCK_LABEL: return "WASM_TRAP_INVALID_BLOCK_LABEL";
     case WASM_TRAP_ELSE_WITHOUT_IF:     return "WASM_TRAP_ELSE_WITHOUT_IF";
+    case WASM_TRAP_INVALID_CONVERSION:  return "WASM_TRAP_INVALID_CONVERSION";
     default:                            return "WASM_TRAP_UNKNOWN";
     }
 }
@@ -219,6 +221,8 @@ typedef enum {
     OP_I32_STORE   = 0x36,
     OP_I32_CONST   = 0x41,
     OP_I64_CONST   = 0x42,
+    OP_F32_CONST   = 0x43, /* raw 4-byte LE immediate */
+    OP_F64_CONST   = 0x44, /* raw 8-byte LE immediate */
     OP_I32_EQZ     = 0x45,
     OP_I32_EQ      = 0x46,
     OP_I32_NE      = 0x47,
@@ -230,6 +234,18 @@ typedef enum {
     OP_I32_LE_U    = 0x4D,
     OP_I32_GE_S    = 0x4E,
     OP_I32_GE_U    = 0x4F,
+    OP_F32_EQ      = 0x5B,
+    OP_F32_NE      = 0x5C,
+    OP_F32_LT      = 0x5D,
+    OP_F32_GT      = 0x5E,
+    OP_F32_LE      = 0x5F,
+    OP_F32_GE      = 0x60,
+    OP_F64_EQ      = 0x61,
+    OP_F64_NE      = 0x62,
+    OP_F64_LT      = 0x63,
+    OP_F64_GT      = 0x64,
+    OP_F64_LE      = 0x65,
+    OP_F64_GE      = 0x66,
     OP_I32_ADD     = 0x6A,
     OP_I32_SUB     = 0x6B,
     OP_I32_MUL     = 0x6C,
@@ -255,7 +271,60 @@ typedef enum {
     OP_I64_XOR     = 0x85,
     OP_I64_SHL     = 0x86,
     OP_I64_SHR_S   = 0x87,
-    OP_I64_SHR_U   = 0x88
+    OP_I64_SHR_U   = 0x88,
+    /* ---- Float arithmetic (exact MVP encodings) ---- */
+    OP_F32_ABS     = 0x8B,
+    OP_F32_NEG     = 0x8C,
+    OP_F32_CEIL    = 0x8D,
+    OP_F32_FLOOR   = 0x8E,
+    OP_F32_TRUNC   = 0x8F,
+    OP_F32_NEAREST = 0x90,
+    OP_F32_SQRT    = 0x91,
+    OP_F32_ADD     = 0x92,
+    OP_F32_SUB     = 0x93,
+    OP_F32_MUL     = 0x94,
+    OP_F32_DIV     = 0x95,
+    OP_F32_MIN     = 0x96,
+    OP_F32_MAX     = 0x97,
+    OP_F32_COPYSIGN = 0x98,
+    OP_F64_ABS     = 0x99,
+    OP_F64_NEG     = 0x9A,
+    OP_F64_CEIL    = 0x9B,
+    OP_F64_FLOOR   = 0x9C,
+    OP_F64_TRUNC   = 0x9D,
+    OP_F64_NEAREST = 0x9E,
+    OP_F64_SQRT    = 0x9F,
+    OP_F64_ADD     = 0xA0,
+    OP_F64_SUB     = 0xA1,
+    OP_F64_MUL     = 0xA2,
+    OP_F64_DIV     = 0xA3,
+    OP_F64_MIN     = 0xA4,
+    OP_F64_MAX     = 0xA5,
+    OP_F64_COPYSIGN = 0xA6,
+    /* 0xA7 is unused in MVP. */
+    OP_I32_TRUNC_F32_S = 0xA8,
+    OP_I32_TRUNC_F32_U = 0xA9,
+    OP_I32_TRUNC_F64_S = 0xAA,
+    OP_I32_TRUNC_F64_U = 0xAB,
+    /* 0xAC/0xAD are saturating conversions (post-MVP, not implemented). */
+    OP_I64_TRUNC_F32_S = 0xAE,
+    OP_I64_TRUNC_F32_U = 0xAF,
+    OP_I64_TRUNC_F64_S = 0xB0,
+    OP_I64_TRUNC_F64_U = 0xB1,
+    OP_F32_CONVERT_I32_S = 0xB2,
+    OP_F32_CONVERT_I32_U = 0xB3,
+    OP_F32_CONVERT_I64_S = 0xB4,
+    OP_F32_CONVERT_I64_U = 0xB5,
+    OP_F32_DEMOTE_F64  = 0xB6,
+    OP_F64_CONVERT_I32_S = 0xB7,
+    OP_F64_CONVERT_I32_U = 0xB8,
+    OP_F64_CONVERT_I64_S = 0xB9,
+    OP_F64_CONVERT_I64_U = 0xBA,
+    OP_F64_PROMOTE_F32 = 0xBB,
+    OP_I32_REINTERPRET_F32 = 0xBC,
+    OP_I64_REINTERPRET_F64 = 0xBD,
+    OP_F32_REINTERPRET_I32 = 0xBE,
+    OP_F64_REINTERPRET_I64 = 0xBF
 } wasm_opcode_t;
 
 /* ---- Phase 5: structured control-flow block kinds ----

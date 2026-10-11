@@ -1,11 +1,12 @@
-# Baseline Makefile — C11 strict, zero-dependency.
-# `make all`  : builds wasm_runner + all test binaries (phase1..6, cli).
+# Baseline Makefile — C11 strict, zero-dependency (libm only for floats).
+# `make all`  : builds wasm_runner + all test binaries (phase1..7, cli).
 # `make test` : builds everything, runs all suites sequentially, prints
 #               per-suite results and a final TOTAL line
 #               ("TOTAL: X passed, Y failed"); non-zero exit on failure.
 # `make clean`: removes the build tree.
 CC       ?= gcc
 CFLAGS   ?= -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude
+LDLIBS   ?= -lm
 SRC       = src/leb128.c src/wasm_parser.c src/wasm_stack.c src/wasm_memory.c \
             src/wasm_frame.c src/wasm_control.c src/wasm_vm.c src/wasm_host.c
 BUILD     = build
@@ -16,45 +17,50 @@ T3        = $(BUILD)/test_phase3
 T4        = $(BUILD)/test_phase4
 T5        = $(BUILD)/test_phase5
 T6        = $(BUILD)/test_phase6
+T7        = $(BUILD)/test_phase7
 TCLI      = $(BUILD)/test_cli
 
-all: $(RUNNER) $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(TCLI)
+all: $(RUNNER) $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(TCLI)
 
 $(RUNNER): $(SRC) src/main.c
 	mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SRC) src/main.c -o $(RUNNER)
+	$(CC) $(CFLAGS) $(SRC) src/main.c -o $(RUNNER) $(LDLIBS)
 
 $(T1): src/leb128.c src/wasm_parser.c tests/test_phase1.c
 	mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) src/leb128.c src/wasm_parser.c tests/test_phase1.c -o $(T1)
+	$(CC) $(CFLAGS) src/leb128.c src/wasm_parser.c tests/test_phase1.c -o $(T1) $(LDLIBS)
 
 $(T2): src/leb128.c src/wasm_parser.c src/wasm_stack.c src/wasm_memory.c tests/test_phase2.c
 	mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) src/leb128.c src/wasm_parser.c src/wasm_stack.c src/wasm_memory.c tests/test_phase2.c -o $(T2)
+	$(CC) $(CFLAGS) src/leb128.c src/wasm_parser.c src/wasm_stack.c src/wasm_memory.c tests/test_phase2.c -o $(T2) $(LDLIBS)
 
 $(T3): $(SRC) tests/test_phase3.c
 	mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SRC) tests/test_phase3.c -o $(T3)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase3.c -o $(T3) $(LDLIBS)
 
 $(T4): $(SRC) tests/test_phase4.c
 	mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SRC) tests/test_phase4.c -o $(T4)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase4.c -o $(T4) $(LDLIBS)
 
 $(T5): $(SRC) tests/test_phase5.c
 	mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SRC) tests/test_phase5.c -o $(T5)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase5.c -o $(T5) $(LDLIBS)
 
 $(T6): $(SRC) tests/test_phase6.c
 	mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(SRC) tests/test_phase6.c -o $(T6)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase6.c -o $(T6) $(LDLIBS)
 
 $(TCLI): tests/test_cli.c
 	mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) tests/test_cli.c -o $(TCLI)
+	$(CC) $(CFLAGS) tests/test_cli.c -o $(TCLI) $(LDLIBS)
+
+$(T7): $(SRC) tests/test_phase7.c
+	mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase7.c -o $(T7) $(LDLIBS)
 
 test: all
 	@pass=0; fail=0; \
-	for t in $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(TCLI); do \
+	for t in $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(TCLI); do \
 	  echo "== $$t =="; \
 	  out=`./$$t`; ec=$$?; \
 	  echo "$$out" | tail -n 3; \
@@ -84,6 +90,9 @@ test5: $(T5)
 test6: $(T6)
 	./$(T6)
 
+test7: $(T7)
+	./$(T7)
+
 testcli: $(TCLI)
 	./$(TCLI)
 
@@ -93,4 +102,4 @@ runner: $(RUNNER)
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test1 test2 test3 test4 test5 test6 testcli runner clean
+.PHONY: all test test1 test2 test3 test4 test5 test6 test7 testcli runner clean
