@@ -10,13 +10,13 @@
 #include "wasm_vm.h"
 
 #ifndef FUZZ_MAX_BYTES
-#define FUZZ_MAX_BYTES 256u
+#define FUZZ_MAX_BYTES 256u /* random input buffer bytes */
 #endif
 #ifndef FUZZ_PAGE_COUNT
-#define FUZZ_PAGE_COUNT 1u
+#define FUZZ_PAGE_COUNT 1u /* pages supplied to each fuzzed VM */
 #endif
 #ifndef FUZZ_STEP_BUDGET
-#define FUZZ_STEP_BUDGET 10u
+#define FUZZ_STEP_BUDGET 10u /* execution steps per fuzz case */
 #endif
 
 static uint64_t next_random(uint64_t *state)

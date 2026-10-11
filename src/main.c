@@ -29,9 +29,15 @@
 #include "wasm_validate.h"
 #include "wasm_vm.h"
 
-#define RUNNER_FILE_MAX (64u * 1024u)
-#define RUNNER_ARENA_PAGES 1u
-#define RUNNER_STEP_BUDGET 10000000u
+#ifndef RUNNER_FILE_MAX
+#define RUNNER_FILE_MAX (64u * 1024u) /* maximum CLI input file in bytes */
+#endif
+#ifndef RUNNER_ARENA_PAGES
+#define RUNNER_ARENA_PAGES 1u /* pages reserved by the CLI memory arena */
+#endif
+#ifndef RUNNER_STEP_BUDGET
+#define RUNNER_STEP_BUDGET 10000000u /* CLI execution watchdog steps */
+#endif
 
 static int g_quiet;
 static int g_result_line;

@@ -125,21 +125,35 @@ typedef struct {
 /* ---- Phase 2: values, stack limits, linear memory, traps ---- */
 
 /* Linear memory page: 64 KiB (WASM MVP core, section 5.4). */
-#define WASM_PAGE_SIZE 65536u
+#ifndef WASM_PAGE_SIZE
+#define WASM_PAGE_SIZE 65536u /* bytes per WebAssembly memory page */
+#endif
 #define WASM_PAGE_SIZE_BYTES WASM_PAGE_SIZE
 /* Absolute spec cap on pages (used only as a sanity ceiling). */
-#define WASM_MEMORY_MAX_PAGES_ABSOLUTE 65536u
+#ifndef WASM_MEMORY_MAX_PAGES_ABSOLUTE
+#define WASM_MEMORY_MAX_PAGES_ABSOLUTE 65536u /* maximum MVP memory pages */
+#endif
 
 /* Fixed-capacity operand stack (embedded-friendly, statically allocatable). */
-#define WASM_STACK_MAX_DEPTH 1024u
+#ifndef WASM_STACK_MAX_DEPTH
+#define WASM_STACK_MAX_DEPTH 1024u /* operand-stack slots */
+#endif
 
 /* Phase 3: call-stack / frame bounds (all storage pre-allocated, no malloc). */
-#define WASM_MAX_CALL_STACK_DEPTH 64u
-#define WASM_MAX_LOCALS_PER_FRAME 32u
+#ifndef WASM_MAX_CALL_STACK_DEPTH
+#define WASM_MAX_CALL_STACK_DEPTH 64u /* active call frames */
+#endif
+#ifndef WASM_MAX_LOCALS_PER_FRAME
+#define WASM_MAX_LOCALS_PER_FRAME 32u /* locals stored in one frame */
+#endif
 
 /* Phase 5: structured-control bounds + function table size. */
-#define WASM_MAX_CONTROL_STACK_DEPTH 32u
-#define WASM_MAX_FUNCTIONS 32u
+#ifndef WASM_MAX_CONTROL_STACK_DEPTH
+#define WASM_MAX_CONTROL_STACK_DEPTH 32u /* nested control frames */
+#endif
+#ifndef WASM_MAX_FUNCTIONS
+#define WASM_MAX_FUNCTIONS 32u /* imported plus defined functions */
+#endif
 
 /* Phase 2 (control-flow completion): longest br_table label vector the
  * interpreter walks in one step (table labels, excluding the default).

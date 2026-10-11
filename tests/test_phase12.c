@@ -33,7 +33,7 @@ int main(void)
 {
     int rc;
     rc = system(RUNNER " --version" REDIR);
-    CHECK(rc == 0 && output_contains("0.6.0", 1), "version output");
+    CHECK(rc == 0 && output_contains("1.0.0", 1), "version output");
     rc = system(RUNNER " --quiet --result-line demo/add.wasm main --arg i32:2 --arg i32:3" REDIR);
     CHECK(rc == 0 && output_contains("RESULT i32 5", 1), "typed i32 result line");
     rc = system(RUNNER " --quiet --result-line demo/fadd.wasm main" REDIR);

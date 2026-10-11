@@ -45,7 +45,7 @@ ARM_CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude \
 
 all: $(RUNNER) $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(T8) $(T9) $(T10) $(T11) $(T12) $(TCLI)
 
-$(RUNNER): $(SRC) src/main.c
+$(RUNNER): $(SRC) src/main.c include/version.h
 	$(MKDIR_P)
 	$(CC) $(CFLAGS) $(SRC) src/main.c -o $(RUNNER) $(LDLIBS)
 
@@ -97,7 +97,7 @@ $(T11): src/leb128.c src/wasm_parser.c src/wasm_validate.c tests/test_phase11.c
 	$(MKDIR_P)
 	$(CC) $(CFLAGS) src/leb128.c src/wasm_parser.c src/wasm_validate.c tests/test_phase11.c -o $(T11) $(LDLIBS)
 
-$(T12): tests/test_phase12.c
+$(T12): tests/test_phase12.c include/version.h
 	$(MKDIR_P)
 	$(CC) $(CFLAGS) tests/test_phase12.c -o $(T12) $(LDLIBS)
 

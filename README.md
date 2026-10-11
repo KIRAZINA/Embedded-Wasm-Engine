@@ -176,6 +176,83 @@ as i32 cells) via a data segment, then loops calling `env.print_i32`):
 
 ```powershell
 .\build\wasm_runner.exe demo\hello.wasm main
+```
+
+## WebAssembly 1.0 (MVP) scope
+
+This is an embedded-oriented WebAssembly 1.0 interpreter with zero dynamic
+allocation. It is intentionally a bounded implementation: module bytes,
+linear-memory backing storage, VM state, and host registries are owned by the
+caller or fixed-capacity objects.
+
+All MVP core sections are traversed, with custom section 0 skipped correctly:
+
+| Section | Status |
+|---:|---|
+| 0 custom | Supported; ignored during traversal and validation |
+| 1 type | Supported |
+| 2 import | Supported for the implemented host function/global bindings |
+| 3 function | Supported |
+| 4 table | Supported; one bounded funcref table |
+| 5 memory | Supported; one bounded linear memory |
+| 6 global | Supported |
+| 7 export | Supported |
+| 8 start | Supported |
+| 9 element | Supported; funcref initialization |
+| 10 code | Supported |
+| 11 data | Supported |
+
+The interpreter dispatches 123 MVP instruction opcodes, grouped as follows:
+
+| Group | Count | Coverage |
+|---|---:|---|
+| Control, calls, branches, select | 13 | structured control, direct/indirect calls |
+| Constants, locals, globals | 9 | four value types and mutable globals |
+| i32 integer | 24 | comparisons, arithmetic, bitwise, shifts, memory load/store |
+| i64 integer | 13 | arithmetic, bitwise, shifts |
+| f32/f64 floating point | 40 | arithmetic, comparisons, rounding, min/max |
+| Conversions and reinterpretation | 22 | truncation, conversion, promote/demote, bit reinterpretation |
+| Memory | 2 | `i32.load` and `i32.store` |
+
+Not implemented: threads/atomics, SIMD, GC, multi-value blocks or returns,
+bulk-memory operations, reference types, sign-extension operations, tail
+calls, multi-memory, and exception handling. Floating-point memory load/store
+opcodes are also not dispatched. These omissions are deliberate MVP subset
+limits and are not claims of full modern-WebAssembly coverage.
+
+## Quickstart
+
+Requirements are a C11 compiler, Make, and the standard C library plus `libm`.
+No package manager, runtime library, or Python dependency is needed for the
+core build.
+
+```sh
+make
+make test
+make fuzz SEED=7 ITER=1000000
+make sanitize
+```
+
+The optional spec harness uses Python 3 standard-library code and user-supplied
+`wast2json` output:
+
+```sh
+wast2json --spec path/to/test.wast -o path/to/test.json
+python3 tools/run_spec_suite.py path/to/test.json --runner build/wasm_runner
+```
+
+The harness does not bundle the WebAssembly spec corpus. Missing curated files
+are reported as skips, not passes.
+
+## CLI reference
+
+`wasm_runner` exits 0 on success, 1 on load/link/runtime failure, and 2 on
+usage or I/O failure. Typed arguments use `--arg i32:5`, `--arg i64:-1`,
+`--arg f32:3.5`, or `--arg f64:2e10`; floating-point bit patterns use a
+hexadecimal integer, for example `--arg f32:0x3f800000` and
+`--arg f64:0x3ff0000000000000`. `--quiet` suppresses banners. `--result-line`
+prints exactly one `RESULT ...` line for machine consumers. `--version`
+prints `1.0.0`.
 
 ## Conformance and fuzz tooling
 
@@ -193,6 +270,17 @@ typical preparation command is:
 Then run `python tools/run_spec_suite.py path/to/test.json --runner build/wasm_runner`.
 The curated default names are documented in the script; `--filter=NAME` limits
 the run. Unsupported JSON command forms are counted as skips and reported.
+
+Conformance evidence in this checkout is bounded by the absence of bundled
+`.json` inputs: the curated run reports 0 executed assertions and 23 skipped
+files until the user supplies conversions. The deterministic smoke fuzzer
+completed 1,000,000 iterations with seed 1 (`parsed=499288`,
+`instantiated=51985`, `executed=19112`) without crashes. Sanitizer execution
+requires a compiler runtime providing ASan and UBSan; the reference MinGW
+host does not provide those libraries, while the committed Ubuntu CI jobs use
+native GCC and Clang sanitizer runtimes.
+
+```
 # [load] 125 bytes from 'demo\hello.wasm'
 # [parse] header ok
 # [link] 2 function(s)

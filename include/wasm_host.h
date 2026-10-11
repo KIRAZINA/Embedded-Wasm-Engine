@@ -30,8 +30,12 @@
 extern "C" {
 #endif
 
-#define WASM_MAX_HOST_FUNCS 16
-#define WASM_HOST_NAME_MAX 32 /* bytes incl. NUL */
+#ifndef WASM_MAX_HOST_FUNCS
+#define WASM_MAX_HOST_FUNCS 16 /* registered host callbacks */
+#endif
+#ifndef WASM_HOST_NAME_MAX
+#define WASM_HOST_NAME_MAX 32 /* bytes per module/name buffer, incl. NUL */
+#endif
 
 typedef struct {
     char module[WASM_HOST_NAME_MAX];

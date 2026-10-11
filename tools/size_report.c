@@ -4,7 +4,9 @@
 #include "wasm_memory.h"
 #include "wasm_vm.h"
 
-#define STM32F4_VM_BUDGET_BYTES (112u * 1024u)
+#ifndef STM32F4_VM_BUDGET_BYTES
+#define STM32F4_VM_BUDGET_BYTES (112u * 1024u) /* maximum VM bytes on STM32F4 */
+#endif
 
 _Static_assert(sizeof(wasm_vm_t) <= STM32F4_VM_BUDGET_BYTES,
                "wasm_vm_t exceeds documented STM32F4 VM budget");
