@@ -1,0 +1,1189 @@
+/*
+ * wasm_vm.c — function entry/exit + local.get/set/tee + Phase 4 step/run core.
+ * C11, -Wall -Wextra -Werror clean. No malloc. No UB shifts/divides.
+ */
+
+#include "wasm_vm.h"
+
+#include <string.h>
+
+#include "leb128.h"
+#include "wasm_control.h"
+
+wasm_trap_t wasm_vm_init(wasm_vm_t *vm)
+{
+    wasm_trap_t tr;
+    uint32_t i;
+    if (vm == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    tr = wasm_stack_init(&vm->operands);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    tr = wasm_call_stack_init(&vm->calls);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    vm->mem = NULL;
+    for (i = 0u; i < (uint32_t)WASM_MAX_FUNCTIONS; i++) {
+        vm->funcs[i].valid = 0;
+        vm->funcs[i].is_host = 0;
+        vm->funcs[i].host_cb = NULL;
+    }
+    return WASM_TRAP_OK;
+}
+
+wasm_trap_t wasm_vm_enter_function(wasm_vm_t *vm, uint32_t func_idx,
+                                   uint32_t param_count, uint32_t local_count,
+                                   uint32_t return_count)
+{
+    uint64_t total64;
+    uint32_t total;
+    uint32_t i;
+    wasm_frame_t frame;
+    wasm_val_t tmp[WASM_MAX_LOCALS_PER_FRAME];
+    wasm_trap_t tr;
+
+    if (vm == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    if (return_count > 1u) {
+        return WASM_TRAP_INVALID_ARGUMENT; /* MVP: at most one result */
+    }
+    total64 = (uint64_t)param_count + (uint64_t)local_count;
+    if (total64 > (uint64_t)WASM_MAX_LOCALS_PER_FRAME) {
+        return WASM_TRAP_INVALID_LOCAL_INDEX;
+    }
+    total = (uint32_t)total64;
+    if (param_count > (uint32_t)WASM_MAX_LOCALS_PER_FRAME) {
+        return WASM_TRAP_INVALID_LOCAL_INDEX;
+    }
+    /* Fail fast BEFORE mutating either stack. */
+    if (wasm_call_stack_is_full(&vm->calls)) {
+        return WASM_TRAP_CALL_STACK_OVERFLOW;
+    }
+    if (wasm_stack_depth(&vm->operands) < param_count) {
+        return WASM_TRAP_INSUFFICIENT_ARGS;
+    }
+
+    /* Pop args last-first into scratch, then lay out P0..Pn in order. */
+    for (i = 0u; i < param_count; i++) {
+        tr = wasm_stack_pop(&vm->operands, &tmp[param_count - 1u - i]);
+        if (tr != WASM_TRAP_OK) {
+            return tr; /* unreachable: depth pre-checked, kept for safety */
+        }
+    }
+    frame.func_idx = func_idx;
+    frame.stack_base_ptr = wasm_stack_depth(&vm->operands);
+    frame.locals_count = total;
+    frame.return_count = return_count;
+    frame.code_ptr = NULL;
+    frame.code_end = NULL;
+    (void)wasm_control_stack_init(&frame.ctrl); /* fresh frame: no open blocks */
+    for (i = 0u; i < param_count; i++) {
+        frame.locals[i] = tmp[i];
+    }
+    /* Zero-init declared locals: deterministic I32 zero. */
+    for (i = param_count; i < total; i++) {
+        frame.locals[i].type = WASM_TYPE_I32;
+        frame.locals[i].value.i32 = 0;
+    }
+
+    return wasm_call_stack_push(&vm->calls, &frame);
+}
+
+wasm_trap_t wasm_vm_exit_function(wasm_vm_t *vm, uint32_t return_count)
+{
+    wasm_frame_t *top = NULL;
+    wasm_trap_t tr;
+    wasm_val_t ret;
+    int have_ret = 0;
+
+    if (vm == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    if (return_count > 1u) {
+        return WASM_TRAP_INVALID_ARGUMENT;
+    }
+    tr = wasm_call_stack_top(&vm->calls, &top);
+    if (tr != WASM_TRAP_OK) {
+        return tr; /* empty -> CALL_STACK_UNDERFLOW */
+    }
+    if (return_count != top->return_count) {
+        return WASM_TRAP_INVALID_ARGUMENT; /* arity must match entry */
+    }
+
+    /* Validate everything before mutating: return value must exist ... */
+    if (return_count == 1u) {
+        tr = wasm_stack_pop(&vm->operands, &ret);
+        if (tr != WASM_TRAP_OK) {
+            return tr; /* missing return -> STACK_UNDERFLOW, state kept */
+        }
+        have_ret = 1;
+    }
+    /* ... and the frame base must be sane (callee must not eat caller data). */
+    if (top->stack_base_ptr > wasm_stack_depth(&vm->operands)) {
+        /* Restore the popped return value before reporting. */
+        if (have_ret) {
+            (void)wasm_stack_push(&vm->operands, ret);
+        }
+        return WASM_TRAP_STACK_UNDERFLOW;
+    }
+    /* ... and re-pushing the result must fit (post-truncation top == base). */
+    if (have_ret && top->stack_base_ptr >= (uint32_t)WASM_STACK_MAX_DEPTH) {
+        (void)wasm_stack_push(&vm->operands, ret);
+        return WASM_TRAP_STACK_OVERFLOW;
+    }
+
+    /* Commit: truncate garbage, re-push the result, drop the frame. */
+    vm->operands.top = top->stack_base_ptr;
+    if (have_ret) {
+        tr = wasm_stack_push(&vm->operands, ret);
+        if (tr != WASM_TRAP_OK) {
+            return tr; /* unreachable: capacity pre-checked above */
+        }
+    }
+    return wasm_call_stack_pop(&vm->calls, NULL);
+}
+
+static wasm_trap_t vm_top_frame(wasm_vm_t *vm, wasm_frame_t **out)
+{
+    wasm_trap_t tr;
+    if (vm == NULL || out == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    tr = wasm_call_stack_top(&vm->calls, out);
+    return tr;
+}
+
+wasm_trap_t wasm_vm_local_get(wasm_vm_t *vm, uint32_t local_idx)
+{
+    wasm_frame_t *f = NULL;
+    wasm_trap_t tr;
+    if (vm == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    tr = vm_top_frame(vm, &f);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    if (local_idx >= f->locals_count) {
+        return WASM_TRAP_INVALID_LOCAL_INDEX;
+    }
+    return wasm_stack_push(&vm->operands, f->locals[local_idx]);
+}
+
+wasm_trap_t wasm_vm_local_set(wasm_vm_t *vm, uint32_t local_idx)
+{
+    wasm_frame_t *f = NULL;
+    wasm_trap_t tr;
+    wasm_val_t v;
+    if (vm == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    tr = vm_top_frame(vm, &f);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    if (local_idx >= f->locals_count) {
+        return WASM_TRAP_INVALID_LOCAL_INDEX;
+    }
+    tr = wasm_stack_pop(&vm->operands, &v);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    f->locals[local_idx] = v;
+    return WASM_TRAP_OK;
+}
+
+wasm_trap_t wasm_vm_local_tee(wasm_vm_t *vm, uint32_t local_idx)
+{
+    wasm_frame_t *f = NULL;
+    wasm_trap_t tr;
+    wasm_val_t v;
+    if (vm == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    tr = vm_top_frame(vm, &f);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    if (local_idx >= f->locals_count) {
+        return WASM_TRAP_INVALID_LOCAL_INDEX;
+    }
+    tr = wasm_stack_peek(&vm->operands, &v);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    f->locals[local_idx] = v;
+    return WASM_TRAP_OK;
+}
+
+/* ================= Phase 4: execution core ================= */
+
+/* Reinterpret u32 bits as i32 without aliasing UB. */
+static int32_t vm_u2s(uint32_t u)
+{
+    int32_t r;
+    memcpy(&r, &u, sizeof(r));
+    return r;
+}
+
+static wasm_trap_t vm_push_i32(wasm_vm_t *vm, int32_t v)
+{
+    wasm_val_t x;
+    x.type = WASM_TYPE_I32;
+    x.value.i32 = v;
+    return wasm_stack_push(&vm->operands, x);
+}
+
+static wasm_trap_t vm_push_i64(wasm_vm_t *vm, int64_t v)
+{
+    wasm_val_t x;
+    x.type = WASM_TYPE_I64;
+    x.value.i64 = v;
+    return wasm_stack_push(&vm->operands, x);
+}
+
+static wasm_trap_t vm_push_bool(wasm_vm_t *vm, int cond)
+{
+    return vm_push_i32(vm, cond ? 1 : 0);
+}
+
+/* Pop two I32 operands (b = top). Restores b if the second pop fails. */
+static wasm_trap_t vm_pop2_i32(wasm_vm_t *vm, int32_t *a, int32_t *b)
+{
+    wasm_val_t va;
+    wasm_val_t vb;
+    wasm_trap_t tr;
+    tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &vb);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &va);
+    if (tr != WASM_TRAP_OK) {
+        (void)wasm_stack_push(&vm->operands, vb);
+        return tr;
+    }
+    *a = va.value.i32;
+    *b = vb.value.i32;
+    return WASM_TRAP_OK;
+}
+
+/* Reinterpret u64 bits as i64 without aliasing UB. */
+static int64_t vm_u2s64(uint64_t u)
+{
+    int64_t r;
+    memcpy(&r, &u, sizeof(r));
+    return r;
+}
+
+/* Pop two I64 operands (b = top). Restores b if the second pop fails. */
+static wasm_trap_t vm_pop2_i64(wasm_vm_t *vm, int64_t *a, int64_t *b)
+{
+    wasm_val_t va;
+    wasm_val_t vb;
+    wasm_trap_t tr;
+    tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I64, &vb);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I64, &va);
+    if (tr != WASM_TRAP_OK) {
+        (void)wasm_stack_push(&vm->operands, vb);
+        return tr;
+    }
+    *a = va.value.i64;
+    *b = vb.value.i64;
+    return WASM_TRAP_OK;
+}
+
+wasm_trap_t wasm_vm_bind_memory(wasm_vm_t *vm, wasm_memory_t *mem)
+{
+    if (vm == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    vm->mem = mem; /* NULL detaches; LOAD/STORE then trap as OOB */
+    return WASM_TRAP_OK;
+}
+
+wasm_trap_t wasm_vm_attach_code(wasm_vm_t *vm, const uint8_t *code, size_t len)
+{
+    wasm_frame_t *f = NULL;
+    wasm_trap_t tr;
+    if (vm == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    tr = wasm_call_stack_top(&vm->calls, &f);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    if (len > 0u && code == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    f->code_ptr = code;
+    f->code_end = (code == NULL) ? NULL : (code + len);
+    return WASM_TRAP_OK;
+}
+
+/* Decode one ULEB128 memarg field (align/offset) against code_end. */
+static wasm_trap_t vm_decode_u32_imm(wasm_frame_t *f, uint32_t *out)
+{
+    const uint8_t *p = f->code_ptr;
+    wasm_err_t e = leb128_decode_u32(&p, f->code_end, out);
+    if (e != WASM_OK) {
+        return WASM_TRAP_CODE_OVERRUN;
+    }
+    f->code_ptr = p;
+    return WASM_TRAP_OK;
+}
+
+/* ================= Phase 5: structured control flow ================= */
+
+/* Decode a blocktype (MVP canonical form: single byte 0x40 void or valtype).
+ * This engine executes void- and i32-valued blocks; other valtypes are
+ * well-formed but unrunnable here -> INVALID_ARGUMENT. */
+static wasm_trap_t vm_decode_blocktype(wasm_frame_t *f, int32_t *out)
+{
+    uint8_t b;
+    if (f->code_ptr == NULL || f->code_end == NULL || f->code_ptr >= f->code_end) {
+        return WASM_TRAP_CODE_OVERRUN;
+    }
+    b = *f->code_ptr++;
+    if (b == 0x40u) {
+        *out = (int32_t)WASM_BLOCKTYPE_VOID;
+        return WASM_TRAP_OK;
+    }
+    if (b == (uint8_t)WASM_TYPE_I32) {
+        *out = (int32_t)WASM_TYPE_I32;
+        return WASM_TRAP_OK;
+    }
+    return WASM_TRAP_INVALID_ARGUMENT;
+}
+
+/* Immediate-skipping helpers for the forward scanner. */
+static wasm_trap_t vm_skip_u32(const uint8_t **pp, const uint8_t *end)
+{
+    uint32_t ignored = 0u;
+    if (leb128_decode_u32(pp, end, &ignored) != WASM_OK) {
+        return WASM_TRAP_CODE_OVERRUN;
+    }
+    (void)ignored;
+    return WASM_TRAP_OK;
+}
+
+static wasm_trap_t vm_skip_s32(const uint8_t **pp, const uint8_t *end)
+{
+    int32_t ignored = 0;
+    if (leb128_decode_s32(pp, end, &ignored) != WASM_OK) {
+        return WASM_TRAP_CODE_OVERRUN;
+    }
+    (void)ignored;
+    return WASM_TRAP_OK;
+}
+
+static wasm_trap_t vm_skip_s64(const uint8_t **pp, const uint8_t *end)
+{
+    int64_t ignored = 0;
+    if (leb128_decode_s64(pp, end, &ignored) != WASM_OK) {
+        return WASM_TRAP_CODE_OVERRUN;
+    }
+    (void)ignored;
+    return WASM_TRAP_OK;
+}
+
+/*
+ * Forward scan from `from` for the END closing `levels` enclosing blocks.
+ * Opens nest deeper; an END met at level 0 closes one enclosing block.
+ * Immediates are skipped opcode-aware so 0x05/0x0B payload bytes can never
+ * false-positive. First level-0 ELSE (if any) is reported via *out_else;
+ * *out_end is the first byte past the final END. Unknown bytes make the
+ * length unknowable -> UNKNOWN_OPCODE; running out -> CODE_OVERRUN.
+ */
+static wasm_trap_t vm_scan_block(const uint8_t *from, const uint8_t *end,
+                                 uint32_t levels,
+                                 const uint8_t **out_else,
+                                 const uint8_t **out_end)
+{
+    const uint8_t *p = from;
+    const uint8_t *found_else = NULL;
+    uint32_t nest = 0u;
+    uint32_t remaining;
+    wasm_trap_t tr;
+
+    if (from == NULL || end == NULL || out_else == NULL || out_end == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    if (levels == 0u) {
+        return WASM_TRAP_INVALID_ARGUMENT;
+    }
+    remaining = levels;
+    while (p < end) {
+        uint8_t op = *p++;
+        switch (op) {
+        case OP_BLOCK:
+        case OP_LOOP:
+        case OP_IF:
+            /* Canonical single-byte blocktype (matches vm_decode_blocktype). */
+            if (p >= end) {
+                return WASM_TRAP_CODE_OVERRUN;
+            }
+            p++;
+            nest++;
+            break;
+        case OP_ELSE:
+            if (nest == 0u && found_else == NULL) {
+                found_else = p;
+            }
+            break;
+        case OP_END:
+            if (nest == 0u) {
+                remaining--;
+                if (remaining == 0u) {
+                    *out_else = found_else;
+                    *out_end = p;
+                    return WASM_TRAP_OK;
+                }
+            } else {
+                nest--;
+            }
+            break;
+        case OP_I32_CONST:
+            tr = vm_skip_s32(&p, end);
+            if (tr != WASM_TRAP_OK) {
+                return tr;
+            }
+            break;
+        case OP_I64_CONST:
+            tr = vm_skip_s64(&p, end);
+            if (tr != WASM_TRAP_OK) {
+                return tr;
+            }
+            break;
+        case OP_LOCAL_GET:
+        case OP_LOCAL_SET:
+        case OP_LOCAL_TEE:
+        case OP_CALL:
+        case OP_BR:
+        case OP_BR_IF:
+            tr = vm_skip_u32(&p, end);
+            if (tr != WASM_TRAP_OK) {
+                return tr;
+            }
+            break;
+        case OP_I32_LOAD:
+        case OP_I32_STORE:
+            tr = vm_skip_u32(&p, end);
+            if (tr != WASM_TRAP_OK) {
+                return tr;
+            }
+            tr = vm_skip_u32(&p, end);
+            if (tr != WASM_TRAP_OK) {
+                return tr;
+            }
+            break;
+        case OP_UNREACHABLE:
+        case OP_RETURN:
+        case OP_I32_EQZ:
+        case OP_I32_EQ:
+        case OP_I32_NE:
+        case OP_I32_LT_S:
+        case OP_I32_LT_U:
+        case OP_I32_GT_S:
+        case OP_I32_GT_U:
+        case OP_I32_LE_S:
+        case OP_I32_LE_U:
+        case OP_I32_GE_S:
+        case OP_I32_GE_U:
+        case OP_I32_ADD:
+        case OP_I32_SUB:
+        case OP_I32_MUL:
+        case OP_I32_DIV_S:
+        case OP_I32_DIV_U:
+        case OP_I32_REM_S:
+        case OP_I32_REM_U:
+        case OP_I32_AND:
+        case OP_I32_OR:
+        case OP_I32_XOR:
+        case OP_I32_SHL:
+        case OP_I32_SHR_S:
+        case OP_I32_SHR_U:
+        case OP_I64_ADD:
+        case OP_I64_SUB:
+        case OP_I64_MUL:
+        case OP_I64_DIV_S:
+        case OP_I64_DIV_U:
+        case OP_I64_REM_S:
+        case OP_I64_REM_U:
+        case OP_I64_AND:
+        case OP_I64_OR:
+        case OP_I64_XOR:
+        case OP_I64_SHL:
+        case OP_I64_SHR_S:
+        case OP_I64_SHR_U:
+            break; /* fixed one-byte instructions */
+        default:
+            return WASM_TRAP_UNKNOWN_OPCODE;
+        }
+    }
+    return WASM_TRAP_CODE_OVERRUN;
+}
+
+/*
+ * Branch to control[depth-1-label]. The operand stack is cut back to the
+ * target's entry height, carrying one result value across when the target
+ * block is valued. LOOP targets rewind to body_start and keep their control
+ * entry; BLOCK/IF targets jump past the target's END and drop it.
+ */
+static wasm_trap_t vm_do_branch(wasm_vm_t *vm, wasm_frame_t *f, uint32_t label)
+{
+    wasm_control_stack_t *cs = &f->ctrl;
+    wasm_control_frame_t *tgt;
+    uint32_t depth = wasm_control_stack_depth(cs);
+    wasm_trap_t tr;
+
+    if (label >= depth) {
+        return WASM_TRAP_INVALID_BLOCK_LABEL;
+    }
+    tgt = &cs->items[depth - 1u - label];
+
+    if (tgt->blocktype == (int32_t)WASM_BLOCKTYPE_VOID) {
+        if (wasm_stack_depth(&vm->operands) < tgt->stack_height) {
+            return WASM_TRAP_STACK_UNDERFLOW;
+        }
+        vm->operands.top = tgt->stack_height;
+    } else {
+        wasm_val_t res;
+        tr = wasm_stack_pop(&vm->operands, &res);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (tgt->stack_height > wasm_stack_depth(&vm->operands)) {
+            (void)wasm_stack_push(&vm->operands, res);
+            return WASM_TRAP_STACK_UNDERFLOW;
+        }
+        vm->operands.top = tgt->stack_height;
+        tr = wasm_stack_push(&vm->operands, res);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+    }
+
+    if (tgt->kind == WASM_BLOCK_TYPE_LOOP) {
+        f->code_ptr = tgt->body_start;
+        cs->depth = depth - label; /* retain target, drop entries above it */
+    } else {
+        const uint8_t *else_pos = NULL;
+        const uint8_t *end_pos = NULL;
+        tr = vm_scan_block(f->code_ptr, f->code_end, label + 1u, &else_pos, &end_pos);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        (void)else_pos;
+        f->code_ptr = end_pos;
+        cs->depth = depth - label - 1u; /* drop target and everything above */
+    }
+    return WASM_TRAP_OK;
+}
+
+wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
+{
+    wasm_frame_t *f = NULL;
+    wasm_trap_t tr;
+    uint8_t op;
+
+    if (vm == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    tr = wasm_call_stack_top(&vm->calls, &f);
+    if (tr != WASM_TRAP_OK) {
+        return tr; /* no active frame */
+    }
+    if (f->code_ptr == NULL || f->code_end == NULL || f->code_ptr >= f->code_end) {
+        return WASM_TRAP_CODE_OVERRUN;
+    }
+    op = *f->code_ptr++;
+
+    switch (op) {
+    case OP_UNREACHABLE:
+        return WASM_TRAP_UNREACHABLE;
+
+    case OP_BLOCK: {
+        int32_t bt = 0;
+        wasm_control_frame_t cf;
+        tr = vm_decode_blocktype(f, &bt);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        cf.kind = WASM_BLOCK_TYPE_BLOCK;
+        cf.blocktype = bt;
+        cf.stack_height = wasm_stack_depth(&vm->operands);
+        cf.body_start = NULL;
+        return wasm_control_stack_push(&f->ctrl, &cf);
+    }
+
+    case OP_LOOP: {
+        int32_t bt = 0;
+        wasm_control_frame_t cf;
+        tr = vm_decode_blocktype(f, &bt);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        cf.kind = WASM_BLOCK_TYPE_LOOP;
+        cf.blocktype = bt;
+        cf.stack_height = wasm_stack_depth(&vm->operands);
+        cf.body_start = f->code_ptr;
+        return wasm_control_stack_push(&f->ctrl, &cf);
+    }
+
+    case OP_IF: {
+        int32_t bt = 0;
+        wasm_val_t cv;
+        wasm_control_frame_t cf;
+        tr = vm_decode_blocktype(f, &bt);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &cv);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (cv.value.i32 != 0) {
+            cf.kind = WASM_BLOCK_TYPE_IF;
+            cf.blocktype = bt;
+            cf.stack_height = wasm_stack_depth(&vm->operands);
+            cf.body_start = NULL;
+            return wasm_control_stack_push(&f->ctrl, &cf);
+        }
+        {
+            const uint8_t *else_pos = NULL;
+            const uint8_t *end_pos = NULL;
+            tr = vm_scan_block(f->code_ptr, f->code_end, 1u, &else_pos, &end_pos);
+            if (tr != WASM_TRAP_OK) {
+                return tr;
+            }
+            if (else_pos != NULL) {
+                f->code_ptr = else_pos;
+                cf.kind = WASM_BLOCK_TYPE_IF;
+                cf.blocktype = bt;
+                cf.stack_height = wasm_stack_depth(&vm->operands);
+                cf.body_start = NULL;
+                return wasm_control_stack_push(&f->ctrl, &cf);
+            }
+            f->code_ptr = end_pos;
+            return WASM_TRAP_OK;
+        }
+    }
+
+    case OP_ELSE: {
+        wasm_control_frame_t *top = NULL;
+        const uint8_t *else_pos = NULL;
+        const uint8_t *end_pos = NULL;
+        tr = wasm_control_stack_top(&f->ctrl, &top);
+        if (tr != WASM_TRAP_OK || top->kind != WASM_BLOCK_TYPE_IF) {
+            return WASM_TRAP_ELSE_WITHOUT_IF;
+        }
+        tr = vm_scan_block(f->code_ptr, f->code_end, 1u, &else_pos, &end_pos);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        (void)else_pos;
+        f->code_ptr = end_pos;
+        return wasm_control_stack_pop(&f->ctrl, NULL);
+    }
+
+    case OP_END:
+        return wasm_control_stack_pop(&f->ctrl, NULL);
+
+    case OP_BR: {
+        uint32_t label = 0u;
+        tr = vm_decode_u32_imm(f, &label);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_do_branch(vm, f, label);
+    }
+
+    case OP_BR_IF: {
+        uint32_t label = 0u;
+        wasm_val_t cv;
+        tr = vm_decode_u32_imm(f, &label);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &cv);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (cv.value.i32 != 0) {
+            return vm_do_branch(vm, f, label);
+        }
+        return WASM_TRAP_OK;
+    }
+
+    case OP_RETURN: {
+        wasm_frame_t *top = NULL;
+        tr = wasm_call_stack_top(&vm->calls, &top);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return wasm_vm_exit_function(vm, top->return_count);
+    }
+
+    case OP_CALL: {
+        uint32_t idx = 0u;
+        const wasm_func_desc_t *d;
+        tr = vm_decode_u32_imm(f, &idx);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (idx >= (uint32_t)WASM_MAX_FUNCTIONS) {
+            return WASM_TRAP_INVALID_ARGUMENT;
+        }
+        d = &vm->funcs[idx];
+        if (!d->valid) {
+            return WASM_TRAP_INVALID_ARGUMENT;
+        }
+        if (d->is_host) {
+            /* Native callback: pop args (last first), invoke, push results. */
+            wasm_val_t argv[WASM_MAX_LOCALS_PER_FRAME];
+            wasm_val_t retv[1];
+            uint32_t i;
+            if (d->host_cb == NULL) {
+                return WASM_TRAP_INVALID_ARGUMENT;
+            }
+            if (d->param_count > (uint32_t)WASM_MAX_LOCALS_PER_FRAME ||
+                d->return_count > 1u) {
+                return WASM_TRAP_INVALID_ARGUMENT;
+            }
+            if (wasm_stack_depth(&vm->operands) < d->param_count) {
+                return WASM_TRAP_STACK_UNDERFLOW;
+            }
+            for (i = 0u; i < d->param_count; i++) {
+                tr = wasm_stack_pop(&vm->operands, &argv[d->param_count - 1u - i]);
+                if (tr != WASM_TRAP_OK) {
+                    return tr;
+                }
+            }
+            retv[0].type = WASM_TYPE_I32;
+            retv[0].value.i32 = 0;
+            tr = d->host_cb(vm, argv, d->param_count, retv, d->return_count);
+            if (tr != WASM_TRAP_OK) {
+                return tr;
+            }
+            for (i = 0u; i < d->return_count; i++) {
+                tr = wasm_stack_push(&vm->operands, retv[i]);
+                if (tr != WASM_TRAP_OK) {
+                    return tr;
+                }
+            }
+            return WASM_TRAP_OK;
+        }
+        tr = wasm_vm_enter_function(vm, idx, d->param_count, d->local_count,
+                                    d->return_count);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return wasm_vm_attach_code(vm, d->code, d->code_len);
+    }
+
+    case OP_I32_CONST: {
+        const uint8_t *p = f->code_ptr;
+        int32_t v = 0;
+        if (leb128_decode_s32(&p, f->code_end, &v) != WASM_OK) {
+            return WASM_TRAP_CODE_OVERRUN;
+        }
+        f->code_ptr = p;
+        return vm_push_i32(vm, v);
+    }
+
+    case OP_I64_CONST: {
+        const uint8_t *p = f->code_ptr;
+        int64_t v = 0;
+        if (leb128_decode_s64(&p, f->code_end, &v) != WASM_OK) {
+            return WASM_TRAP_CODE_OVERRUN;
+        }
+        f->code_ptr = p;
+        return vm_push_i64(vm, v);
+    }
+
+    case OP_LOCAL_GET:
+    case OP_LOCAL_SET:
+    case OP_LOCAL_TEE: {
+        uint32_t idx = 0u;
+        tr = vm_decode_u32_imm(f, &idx);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (op == OP_LOCAL_GET) {
+            return wasm_vm_local_get(vm, idx);
+        }
+        if (op == OP_LOCAL_SET) {
+            return wasm_vm_local_set(vm, idx);
+        }
+        return wasm_vm_local_tee(vm, idx);
+    }
+
+    case OP_I32_ADD:
+    case OP_I32_SUB:
+    case OP_I32_MUL:
+    case OP_I32_AND:
+    case OP_I32_OR:
+    case OP_I32_XOR: {
+        int32_t a = 0, b = 0;
+        uint32_t r;
+        tr = vm_pop2_i32(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (op == OP_I32_ADD) {
+            r = (uint32_t)a + (uint32_t)b;
+        } else if (op == OP_I32_SUB) {
+            r = (uint32_t)a - (uint32_t)b;
+        } else if (op == OP_I32_MUL) {
+            r = (uint32_t)a * (uint32_t)b;
+        } else if (op == OP_I32_AND) {
+            r = (uint32_t)a & (uint32_t)b;
+        } else if (op == OP_I32_OR) {
+            r = (uint32_t)a | (uint32_t)b;
+        } else {
+            r = (uint32_t)a ^ (uint32_t)b;
+        }
+        return vm_push_i32(vm, vm_u2s(r));
+    }
+
+    case OP_I32_DIV_S:
+    case OP_I32_DIV_U:
+    case OP_I32_REM_S:
+    case OP_I32_REM_U: {
+        int32_t a = 0, b = 0;
+        tr = vm_pop2_i32(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (b == 0) {
+            return WASM_TRAP_DIV_BY_ZERO;
+        }
+        if (op == OP_I32_DIV_S) {
+            if (a == INT32_MIN && b == -1) {
+                return WASM_TRAP_INTEGER_OVERFLOW;
+            }
+            return vm_push_i32(vm, a / b);
+        }
+        if (op == OP_I32_DIV_U) {
+            return vm_push_i32(vm, vm_u2s((uint32_t)a / (uint32_t)b));
+        }
+        if (op == OP_I32_REM_S) {
+            if (a == INT32_MIN && b == -1) {
+                return WASM_TRAP_INTEGER_OVERFLOW;
+            }
+            return vm_push_i32(vm, a % b);
+        }
+        return vm_push_i32(vm, vm_u2s((uint32_t)a % (uint32_t)b));
+    }
+
+    case OP_I32_SHL:
+    case OP_I32_SHR_S:
+    case OP_I32_SHR_U: {
+        int32_t a = 0, b = 0;
+        uint32_t n;
+        tr = vm_pop2_i32(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        n = (uint32_t)b & 31u; /* WASM masks the count; also kills C UB */
+        if (op == OP_I32_SHL) {
+            return vm_push_i32(vm, vm_u2s((uint32_t)a << n));
+        }
+        if (op == OP_I32_SHR_U) {
+            return vm_push_i32(vm, vm_u2s((uint32_t)a >> n));
+        }
+        { /* SHR_S: portable arithmetic shift (C >> on negatives is impl-defined). */
+            uint32_t logical = (uint32_t)a >> n;
+            uint32_t r;
+            if (n == 0u || a >= 0) {
+                r = logical;
+            } else {
+                r = logical | ((uint32_t)(~0u) << (32u - n));
+            }
+            return vm_push_i32(vm, vm_u2s(r));
+        }
+    }
+
+    case OP_I64_ADD:
+    case OP_I64_SUB:
+    case OP_I64_MUL:
+    case OP_I64_AND:
+    case OP_I64_OR:
+    case OP_I64_XOR: {
+        int64_t a = 0, b = 0;
+        uint64_t r;
+        tr = vm_pop2_i64(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (op == OP_I64_ADD) {
+            r = (uint64_t)a + (uint64_t)b;
+        } else if (op == OP_I64_SUB) {
+            r = (uint64_t)a - (uint64_t)b;
+        } else if (op == OP_I64_MUL) {
+            r = (uint64_t)a * (uint64_t)b;
+        } else if (op == OP_I64_AND) {
+            r = (uint64_t)a & (uint64_t)b;
+        } else if (op == OP_I64_OR) {
+            r = (uint64_t)a | (uint64_t)b;
+        } else {
+            r = (uint64_t)a ^ (uint64_t)b;
+        }
+        return vm_push_i64(vm, vm_u2s64(r));
+    }
+
+    case OP_I64_DIV_S:
+    case OP_I64_DIV_U:
+    case OP_I64_REM_S:
+    case OP_I64_REM_U: {
+        int64_t a = 0, b = 0;
+        tr = vm_pop2_i64(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (b == 0) {
+            return WASM_TRAP_DIV_BY_ZERO;
+        }
+        if (op == OP_I64_DIV_S) {
+            if (a == INT64_MIN && b == -1) {
+                return WASM_TRAP_INTEGER_OVERFLOW;
+            }
+            return vm_push_i64(vm, a / b);
+        }
+        if (op == OP_I64_DIV_U) {
+            return vm_push_i64(vm, vm_u2s64((uint64_t)a / (uint64_t)b));
+        }
+        if (op == OP_I64_REM_S) {
+            if (a == INT64_MIN && b == -1) {
+                return WASM_TRAP_INTEGER_OVERFLOW;
+            }
+            return vm_push_i64(vm, a % b);
+        }
+        return vm_push_i64(vm, vm_u2s64((uint64_t)a % (uint64_t)b));
+    }
+
+    case OP_I64_SHL:
+    case OP_I64_SHR_S:
+    case OP_I64_SHR_U: {
+        int64_t a = 0, b = 0;
+        uint64_t n;
+        tr = vm_pop2_i64(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        n = (uint64_t)b & 63u; /* WASM masks the count; also kills C UB */
+        if (op == OP_I64_SHL) {
+            return vm_push_i64(vm, vm_u2s64((uint64_t)a << n));
+        }
+        if (op == OP_I64_SHR_U) {
+            return vm_push_i64(vm, vm_u2s64((uint64_t)a >> n));
+        }
+        { /* SHR_S: portable arithmetic shift (C >> on negatives is impl-defined). */
+            uint64_t logical = (uint64_t)a >> n;
+            uint64_t r;
+            if (n == 0u || a >= 0) {
+                r = logical;
+            } else {
+                r = logical | ((uint64_t)(~0ULL) << (64u - n));
+            }
+            return vm_push_i64(vm, vm_u2s64(r));
+        }
+    }
+
+    case OP_I32_EQZ: {
+        wasm_val_t v;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_bool(vm, v.value.i32 == 0);
+    }
+
+    case OP_I32_EQ:
+    case OP_I32_NE:
+    case OP_I32_LT_S:
+    case OP_I32_LT_U:
+    case OP_I32_GT_S:
+    case OP_I32_GT_U:
+    case OP_I32_LE_S:
+    case OP_I32_LE_U:
+    case OP_I32_GE_S:
+    case OP_I32_GE_U: {
+        int32_t a = 0, b = 0;
+        int cond = 0;
+        tr = vm_pop2_i32(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        switch (op) {
+        case OP_I32_EQ:   cond = (a == b); break;
+        case OP_I32_NE:   cond = (a != b); break;
+        case OP_I32_LT_S: cond = (a < b); break;
+        case OP_I32_LT_U: cond = ((uint32_t)a < (uint32_t)b); break;
+        case OP_I32_GT_S: cond = (a > b); break;
+        case OP_I32_GT_U: cond = ((uint32_t)a > (uint32_t)b); break;
+        case OP_I32_LE_S: cond = (a <= b); break;
+        case OP_I32_LE_U: cond = ((uint32_t)a <= (uint32_t)b); break;
+        case OP_I32_GE_S: cond = (a >= b); break;
+        default:          cond = ((uint32_t)a >= (uint32_t)b); break; /* GE_U */
+        }
+        return vm_push_bool(vm, cond);
+    }
+
+    case OP_I32_LOAD: {
+        uint32_t align = 0u, offset = 0u;
+        wasm_val_t vb;
+        uint64_t ea64;
+        int32_t v = 0;
+        tr = vm_decode_u32_imm(f, &align);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        (void)align; /* hint only; correctness never depends on it */
+        tr = vm_decode_u32_imm(f, &offset);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &vb);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        ea64 = (uint64_t)(uint32_t)vb.value.i32 + (uint64_t)offset;
+        if (ea64 > (uint64_t)0xFFFFFFFFu) {
+            return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        }
+        if (vm->mem == NULL) {
+            return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        }
+        tr = wasm_memory_load_i32(vm->mem, (uint32_t)ea64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_i32(vm, v);
+    }
+
+    case OP_I32_STORE: {
+        uint32_t align = 0u, offset = 0u;
+        wasm_val_t vv;
+        wasm_val_t vb;
+        uint64_t ea64;
+        tr = vm_decode_u32_imm(f, &align);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        (void)align;
+        tr = vm_decode_u32_imm(f, &offset);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        /* Stack order: [base, value]; value is on top. */
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &vv);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &vb);
+        if (tr != WASM_TRAP_OK) {
+            (void)wasm_stack_push(&vm->operands, vv);
+            return tr;
+        }
+        ea64 = (uint64_t)(uint32_t)vb.value.i32 + (uint64_t)offset;
+        if (ea64 > (uint64_t)0xFFFFFFFFu) {
+            return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        }
+        if (vm->mem == NULL) {
+            return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        }
+        return wasm_memory_store_i32(vm->mem, (uint32_t)ea64, vv.value.i32);
+    }
+
+    default:
+        return WASM_TRAP_UNKNOWN_OPCODE;
+    }
+}
+
+wasm_trap_t wasm_vm_run(wasm_vm_t *vm)
+{
+    wasm_frame_t *f = NULL;
+    wasm_trap_t tr;
+    if (vm == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    for (;;) {
+        tr = wasm_call_stack_top(&vm->calls, &f);
+        if (tr != WASM_TRAP_OK) {
+            return WASM_TRAP_OK; /* no frames: nothing to execute */
+        }
+        if (f->code_ptr == NULL || f->code_end == NULL || f->code_ptr >= f->code_end) {
+            return WASM_TRAP_OK; /* top frame's code consumed: finished */
+        }
+        tr = wasm_vm_step(vm);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+    }
+}
+
+wasm_trap_t wasm_vm_define_function(wasm_vm_t *vm, uint32_t func_idx,
+                                    uint32_t param_count, uint32_t local_count,
+                                    uint32_t return_count,
+                                    const uint8_t *code, size_t code_len)
+{
+    uint64_t total;
+    if (vm == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    if (func_idx >= (uint32_t)WASM_MAX_FUNCTIONS) {
+        return WASM_TRAP_INVALID_ARGUMENT;
+    }
+    if (return_count > 1u) {
+        return WASM_TRAP_INVALID_ARGUMENT;
+    }
+    total = (uint64_t)param_count + (uint64_t)local_count;
+    if (total > (uint64_t)WASM_MAX_LOCALS_PER_FRAME) {
+        return WASM_TRAP_INVALID_ARGUMENT;
+    }
+    if (code_len > 0u && code == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    vm->funcs[func_idx].param_count = param_count;
+    vm->funcs[func_idx].local_count = local_count;
+    vm->funcs[func_idx].return_count = return_count;
+    vm->funcs[func_idx].code = code;
+    vm->funcs[func_idx].code_len = code_len;
+    vm->funcs[func_idx].valid = 1;
+    vm->funcs[func_idx].is_host = 0;
+    vm->funcs[func_idx].host_cb = NULL;
+    return WASM_TRAP_OK;
+}
+
+wasm_trap_t wasm_vm_define_host_function(wasm_vm_t *vm, uint32_t func_idx,
+                                         uint32_t param_count,
+                                         uint32_t return_count,
+                                         wasm_host_func_t cb)
+{
+    if (vm == NULL || cb == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    if (func_idx >= (uint32_t)WASM_MAX_FUNCTIONS) {
+        return WASM_TRAP_INVALID_ARGUMENT;
+    }
+    if (param_count > (uint32_t)WASM_MAX_LOCALS_PER_FRAME || return_count > 1u) {
+        return WASM_TRAP_INVALID_ARGUMENT;
+    }
+    vm->funcs[func_idx].param_count = param_count;
+    vm->funcs[func_idx].local_count = 0u;
+    vm->funcs[func_idx].return_count = return_count;
+    vm->funcs[func_idx].code = NULL;
+    vm->funcs[func_idx].code_len = 0u;
+    vm->funcs[func_idx].valid = 1;
+    vm->funcs[func_idx].is_host = 1;
+    vm->funcs[func_idx].host_cb = cb;
+    return WASM_TRAP_OK;
+}

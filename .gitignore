@@ -1,0 +1,18 @@
+# Build tree (generated binaries, never committed)
+build/
+
+# Compiled objects / archives / dependency files
+*.o
+*.obj
+*.a
+*.d
+
+# Windows / toolchain outputs
+*.exe
+*.pdb
+*.ilk
+*.lib
+*.exp
+
+# macOS metadata
+.DS_Store
