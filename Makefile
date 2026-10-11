@@ -5,6 +5,7 @@
 #               ("TOTAL: X passed, Y failed"); non-zero exit on failure.
 # `make clean`: removes the build tree.
 CC       ?= gcc
+PYTHON   ?= python3
 CFLAGS   ?= -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude
 LDLIBS   ?= -lm
 SRC       = src/leb128.c src/wasm_parser.c src/wasm_stack.c src/wasm_memory.c \
@@ -13,8 +14,10 @@ SRC       = src/leb128.c src/wasm_parser.c src/wasm_stack.c src/wasm_memory.c \
 BUILD     = build
 ifeq ($(OS),Windows_NT)
 MKDIR_P   = if not exist $(BUILD) mkdir $(BUILD)
+ARM_MKDIR = if not exist "$(ARM_BUILD)" mkdir "$(ARM_BUILD)"
 else
 MKDIR_P   = mkdir -p $(BUILD)
+ARM_MKDIR = mkdir -p $(ARM_BUILD)
 endif
 RUNNER    = $(BUILD)/wasm_runner
 T1        = $(BUILD)/test_phase1
@@ -33,6 +36,12 @@ TCLI      = $(BUILD)/test_cli
 FUZZ      = $(BUILD)/fuzz_smoke
 SEED      ?= 1
 ITER      ?= 1000000
+ARM_CC    ?= arm-none-eabi-gcc
+ARM_AR    ?= arm-none-eabi-ar
+ARM_BUILD = $(BUILD)/arm
+ARM_OBJECTS = $(patsubst src/%.c,$(ARM_BUILD)/%.o,$(SRC))
+ARM_CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude \
+             -mcpu=cortex-m4 -mthumb -Os -ffreestanding -ffunction-sections -fdata-sections
 
 all: $(RUNNER) $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(T8) $(T9) $(T10) $(T11) $(T12) $(TCLI)
 
@@ -156,6 +165,24 @@ testcli: $(TCLI)
 fuzz: $(FUZZ)
 	./$(FUZZ) $(SEED) $(ITER)
 
+size-report: tools/size_report.c
+	$(MKDIR_P)
+	$(CC) $(CFLAGS) tools/size_report.c -o $(BUILD)/size_report $(LDLIBS)
+	./$(BUILD)/size_report
+
+targets/stm32/demo_add_wasm.c: demo/add.wasm tools/bin2c.py
+	$(PYTHON) tools/bin2c.py demo/add.wasm targets/stm32/demo_add_wasm.c embedded_demo_wasm
+
+$(ARM_BUILD)/%.o: src/%.c
+	$(ARM_MKDIR)
+	$(ARM_CC) $(ARM_CFLAGS) -c $< -o $@
+
+arm-cross: targets/stm32/demo_add_wasm.c $(ARM_OBJECTS)
+	$(ARM_AR) rcs $(ARM_BUILD)/libwasm_engine.a $(ARM_OBJECTS)
+	$(ARM_CC) $(ARM_CFLAGS) targets/stm32/embedded_demo.c targets/stm32/demo_add_wasm.c \
+		$(ARM_BUILD)/libwasm_engine.a -specs=nosys.specs -Wl,--gc-sections,-Map=$(ARM_BUILD)/embedded_demo.map \
+		-o $(ARM_BUILD)/embedded_demo.elf -lm
+
 sanitize:
 	$(MAKE) CFLAGS="$(CFLAGS) -fsanitize=address,undefined -fno-sanitize-recover=all" all $(FUZZ)
 	$(MAKE) CFLAGS="$(CFLAGS) -fsanitize=address,undefined -fno-sanitize-recover=all" test
@@ -167,4 +194,4 @@ runner: $(RUNNER)
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 testcli runner fuzz sanitize clean
+.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 testcli runner fuzz size-report arm-cross sanitize clean

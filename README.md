@@ -1,3 +1,5 @@
+[![CI](https://img.shields.io/badge/CI-GitHub_Actions-blue)](.github/workflows/ci.yml)
+
 # Embedded WebAssembly Interpreter (C11, zero-allocation)
 
 An ultra-lightweight, zero-dependency WebAssembly MVP interpreter written in
@@ -229,10 +231,38 @@ Inspect a module without executing it:
 Exit codes: `0` success, `1` link/runtime error (message names the trap,
 e.g. `WASM_TRAP_DIV_BY_ZERO`), `2` usage/I/O error.
 
+## Targets
+
+The core is suitable for freestanding Cortex-M builds. `make arm-cross`
+requires `arm-none-eabi-gcc` and `arm-none-eabi-ar`; it compiles every core
+source except `src/main.c`, creates `build/arm/libwasm_engine.a`, and links
+`build/arm/embedded_demo.elf` for Cortex-M4 with `-specs=nosys.specs` and a
+link map. The STM32 demo embeds `demo/add.wasm` in flash, parses and validates
+it before instantiation, invokes `main(3, 4)`, and sends the decimal result to
+the board-specific `embedded_putc` retarget hook. The checked-in byte array is
+regenerated with `python3 tools/bin2c.py demo/add.wasm
+targets/stm32/demo_add_wasm.c embedded_demo_wasm`.
+
+`make size-report` prints the measured static engine footprint and contains a
+compile-time assertion that `sizeof(wasm_vm_t)` fits the documented 112 KiB
+STM32F4 VM budget. On the reference MinGW build this is:
+
+```
+wasm_vm_t=105008 bytes
+wasm_host_registry_t=3584 bytes
+wasm_memory_t=24 bytes
+engine_static_footprint=108616 bytes
+```
+
+For ESP32 and ESP32-C3, see [targets/esp32/README.md](targets/esp32/README.md)
+for the exact ESP-IDF component setup and `idf.py` commands. The component
+wrapper links the same zero-allocation core; application code supplies its
+static memory arena and host bindings.
+
 ## Testing
 
 Standalone `assert`-style suites, no test framework. Current status:
-**1490/1490 passing, 0 failed** (`make test` prints `TOTAL: 1490 passed, 0 failed`).
+**1599/1599 passing, 0 failed** (`make test` prints `TOTAL: 1599 passed, 0 failed`).
 
 | Suite | Coverage | Checks |
 |---|---|---|
@@ -247,6 +277,8 @@ Standalone `assert`-style suites, no test framework. Current status:
 | `test_phase9` | Global get/set/immutability/init forms/imports, data placement/bounds/caps, start run-once/rejects/host-start, register validation, CLI hello run | 200 |
 | `test_phase8` | br_table all-arms/default/unsigned-index/loop-target/valued-carry/malformed/scanner, select over 4 types incl. NaN/mismatch/underflow, CLI dispatch run | 102 |
 | `test_phase7` | f32/f64 const/arith/sqrt/min-max/abs-neg-copysign/round/nearest/cmp, all 8 trunc boundaries, converts, reinterprets, NaN propagation, memory NaN round-trips, CLI f32 run + dump | 357 |
+| `test_phase11` | static module validation corpus | 102 |
+| `test_phase12` | conformance/fuzz tooling helpers | 7 |
 
 ## Architecture
 
@@ -295,11 +327,11 @@ Fuzz-smoke defaults are also overrideable at compile time: `FUZZ_MAX_BYTES`
 
 ## Memory footprint
 
-Static engine cost (LP64, asserted in `test_phase6`):
+Static engine cost (measured by `make size-report`):
 
 ```
-sizeof(vm)=102424  sizeof(registry)=1408  sizeof(mem)=24
-engine = 103984 bytes  (limit 131072)  →  < 128 KiB ✓
+sizeof(vm)=105008  sizeof(registry)=3584  sizeof(mem)=24
+engine = 108616 bytes  (limit 131072)  →  < 128 KiB ✓
 ```
 
 Guest linear memory and the module image live in application-owned buffers

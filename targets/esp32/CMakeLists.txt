@@ -1,0 +1,14 @@
+idf_component_register(
+    SRCS
+        "${CMAKE_CURRENT_LIST_DIR}/../../src/leb128.c"
+        "${CMAKE_CURRENT_LIST_DIR}/../../src/wasm_parser.c"
+        "${CMAKE_CURRENT_LIST_DIR}/../../src/wasm_stack.c"
+        "${CMAKE_CURRENT_LIST_DIR}/../../src/wasm_memory.c"
+        "${CMAKE_CURRENT_LIST_DIR}/../../src/wasm_frame.c"
+        "${CMAKE_CURRENT_LIST_DIR}/../../src/wasm_control.c"
+        "${CMAKE_CURRENT_LIST_DIR}/../../src/wasm_vm.c"
+        "${CMAKE_CURRENT_LIST_DIR}/../../src/wasm_host.c"
+        "${CMAKE_CURRENT_LIST_DIR}/../../src/wasm_validate.c"
+    INCLUDE_DIRS
+        "${CMAKE_CURRENT_LIST_DIR}/../../include"
+)
