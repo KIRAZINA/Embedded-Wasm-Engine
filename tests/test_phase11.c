@@ -35,11 +35,34 @@ static wasm_err_t validate_bytes(const uint8_t *bytes, size_t len)
     return e == WASM_OK ? wasm_validate_module(&mod) : e;
 }
 
+static size_t module_with_result_body(uint8_t *m, uint8_t rtype,
+                                      const uint8_t *body, size_t body_len)
+{
+    size_t p = 0u;
+    m[p++] = 0x00u; m[p++] = 0x61u; m[p++] = 0x73u; m[p++] = 0x6Du;
+    m[p++] = 0x01u; m[p++] = 0x00u; m[p++] = 0x00u; m[p++] = 0x00u;
+    m[p++] = 0x01u; m[p++] = 0x05u; m[p++] = 0x01u; m[p++] = 0x60u;
+    m[p++] = 0x00u; m[p++] = 0x01u; m[p++] = rtype;
+    m[p++] = 0x03u; m[p++] = 0x02u; m[p++] = 0x01u; m[p++] = 0x00u;
+    m[p++] = 0x0Au; m[p++] = (uint8_t)(body_len + 3u); m[p++] = 0x01u;
+    m[p++] = (uint8_t)(body_len + 1u); m[p++] = 0x00u;
+    memcpy(&m[p], body, body_len); p += body_len;
+    return p;
+}
+
 static void check_body(const uint8_t *body, size_t len, wasm_err_t want,
                        const char *name)
 {
     uint8_t module[96];
     size_t n = module_with_body(module, body, len);
+    CHECK(validate_bytes(module, n) == want, name);
+}
+
+static void check_result_body(uint8_t rtype, const uint8_t *body, size_t len,
+                              wasm_err_t want, const char *name)
+{
+    uint8_t module[128];
+    size_t n = module_with_result_body(module, rtype, body, len);
     CHECK(validate_bytes(module, n) == want, name);
 }
 
@@ -74,6 +97,8 @@ static void test_corpus(void)
     };
     static const uint8_t select_underflow[] = { 0x1Bu, 0x0Bu };
     static const uint8_t br_if_bad_cond[] = { 0x02u, 0x40u, 0x0Du, 0x00u, 0x0Bu };
+    static const uint8_t nop_rejected[] = { 0x01u, 0x0Bu };
+    static const uint8_t drop_rejected[] = { 0x41u, 0x00u, 0x1Au, 0x0Bu };
     unsigned i;
 
     check_body(valid, sizeof(valid), WASM_OK, "valid body accepted");
@@ -88,6 +113,49 @@ static void test_corpus(void)
     check_body(else_bad, sizeof(else_bad), WASM_ERR_INVALID_TYPE, "else result agreement");
     check_body(select_underflow, sizeof(select_underflow), WASM_ERR_INVALID_TYPE, "select operands");
     check_body(br_if_bad_cond, sizeof(br_if_bad_cond), WASM_ERR_INVALID_TYPE, "br_if condition");
+    check_body(nop_rejected, sizeof(nop_rejected), WASM_ERR_INVALID_SECTION, "mvp nop rejected");
+    check_body(drop_rejected, sizeof(drop_rejected), WASM_ERR_INVALID_SECTION, "mvp drop rejected");
+
+    {
+        static const uint8_t sel_i32[] = {
+            0x41u, 0x0Au, 0x41u, 0x14u, 0x41u, 0x01u, 0x1Bu, 0x0Bu
+        };
+        static const uint8_t sel_i64[] = {
+            0x42u, 0x01u, 0x42u, 0x02u, 0x41u, 0x00u, 0x1Bu, 0x0Bu
+        };
+        static const uint8_t sel_f32[] = {
+            0x43u, 0x00u, 0x00u, 0x80u, 0x3Fu,
+            0x43u, 0x00u, 0x00u, 0x00u, 0x40u,
+            0x41u, 0x01u, 0x1Bu, 0x0Bu
+        };
+        static const uint8_t sel_f64[] = {
+            0x44u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0xF0u, 0x3Fu,
+            0x44u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x00u, 0x40u,
+            0x41u, 0x00u, 0x1Bu, 0x0Bu
+        };
+        static const uint8_t sel_cond_i64[] = {
+            0x41u, 0x01u, 0x41u, 0x02u, 0x42u, 0x01u, 0x1Bu, 0x0Bu
+        };
+        static const uint8_t sel_mismatch[] = {
+            0x41u, 0x01u, 0x42u, 0x01u, 0x41u, 0x01u, 0x1Bu, 0x0Bu
+        };
+        check_result_body(0x7Fu, sel_i32, sizeof(sel_i32), WASM_OK,
+                          "select i32 accepted");
+        check_result_body(0x7Eu, sel_i64, sizeof(sel_i64), WASM_OK,
+                          "select i64 accepted");
+        check_result_body(0x7Du, sel_f32, sizeof(sel_f32), WASM_OK,
+                          "select f32 accepted");
+        check_result_body(0x7Cu, sel_f64, sizeof(sel_f64), WASM_OK,
+                          "select f64 accepted");
+        check_result_body(0x7Fu, sel_cond_i64, sizeof(sel_cond_i64),
+                          WASM_ERR_INVALID_TYPE, "select condition not i32");
+        check_result_body(0x7Fu, sel_mismatch, sizeof(sel_mismatch),
+                          WASM_ERR_INVALID_TYPE, "select operand types differ");
+        check_body(sel_cond_i64, sizeof(sel_cond_i64), WASM_ERR_INVALID_TYPE,
+                   "select cond i64 in void func");
+        check_body(sel_mismatch, sizeof(sel_mismatch), WASM_ERR_INVALID_TYPE,
+                   "select mismatch in void func");
+    }
     CHECK(validate_bytes(global_set_immutable, sizeof(global_set_immutable)) ==
           WASM_ERR_INVALID_GLOBAL, "immutable global.set");
     CHECK(validate_bytes(alignment_too_large, sizeof(alignment_too_large)) ==
