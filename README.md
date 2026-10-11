@@ -30,7 +30,8 @@ anywhere**, verified by audit. All builds are warning-free under
   (0x7FC00000, 0x7FF8000000000000); other arithmetic propagates the
   host NaN (quiet bit guaranteed).
 - **Structured control flow** — `block`/`loop`/`if`/`else`/`end`,
-  `br`/`br_if` with relative labels, `return`, `call`, `local.get/set/tee`.
+  `br`/`br_if`/`br_table` with relative labels, `return`, `call`,
+  `local.get/set/tee`, untyped `select` over i32/i64/f32/f64.
 - **Linear memory** — bounds-checked little-endian `u8/i32/i64/f32/f64`
   loads/stores (unaligned-safe for strict-alignment ARM), page grow with
   zero-filled tails, wraparound-proof offset checks.
@@ -49,7 +50,7 @@ anywhere**, verified by audit. All builds are warning-free under
 - Blocks carry void or i32 results; functions return at most one value.
 - Fixed capacities (see Limits); oversized modules trap cleanly instead of
   allocating.
-- No float parsing of CLI args (i32 only); no `br_table`, SIMD, threads,
+- No float parsing of CLI args (i32 only); no SIMD, threads,
   or GC extensions.
 
 ## Layout
@@ -64,10 +65,11 @@ anywhere**, verified by audit. All builds are warning-free under
 ├── src/               # leb128.c, wasm_parser.c, wasm_stack.c, wasm_memory.c,
 │                      #   wasm_frame.c, wasm_control.c, wasm_vm.c,
 │                      #   wasm_host.c, main.c (CLI runner)
-├── tests/             # test_phase1.c … test_phase7.c, test_cli.c (assert-based, no framework)
+├── tests/             # test_phase1.c … test_phase8.c, test_cli.c (assert-based, no framework)
 ├── demo/              # add.wasm (main(a,b)->a+b), print.wasm (host-callback demo),
-│                      #   fadd.wasm (main()->f32 { 1.5 + 2.5 })
-└── build/             # wasm_runner + 8 test binaries (generated)
+│                      #   fadd.wasm (main()->f32 { 1.5 + 2.5 }),
+│                      #   dispatch.wasm (main(i)->i32 dispatch via br_table)
+└── build/             # wasm_runner + 9 test binaries (generated)
 ```
 
 ## Requirements
@@ -129,6 +131,13 @@ Float demo (`fadd.wasm` computes `1.5 + 2.5` with no arguments):
 # result: 4 (f32)
 ```
 
+Dispatch demo (`dispatch.wasm` selects 100/200/300 via `br_table`):
+
+```powershell
+.\build\wasm_runner.exe demo\dispatch.wasm main 0  # result: 100 (i32)
+.\build\wasm_runner.exe demo\dispatch.wasm main 2  # result: 300 (i32)
+```
+
 Result formats: `result: <int> (i32)`, `result: <int> (i64)`,
 `result: <%.9g> (f32)` (9 significant digits round-trip any f32),
 `result: <%.17g> (f64)` (17 digits round-trip any f64).
@@ -158,7 +167,7 @@ e.g. `WASM_TRAP_DIV_BY_ZERO`), `2` usage/I/O error.
 ## Testing
 
 Standalone `assert`-style suites, no test framework. Current status:
-**1038/1038 passing, 0 failed** (`make test` prints `TOTAL: 1038 passed, 0 failed`).
+**1140/1140 passing, 0 failed** (`make test` prints `TOTAL: 1140 passed, 0 failed`).
 
 | Suite | Coverage | Checks |
 |---|---|---|
@@ -169,6 +178,7 @@ Standalone `assert`-style suites, no test framework. Current status:
 | `test_phase5` | blocks/loops/branches, factorial, `call`/`return` interop | 74 |
 | `test_phase6` | Host callbacks, export lookup, import binding, instantiation, i64 ALU, CLI `--dump` output | 160 |
 | `test_cli` | End-to-end runner runs of hand-built `()->i64` modules, exact `result:` rendering incl. `INT64_MIN` | 15 |
+| `test_phase8` | br_table all-arms/default/unsigned-index/loop-target/valued-carry/malformed/scanner, select over 4 types incl. NaN/mismatch/underflow, CLI dispatch run | 102 |
 | `test_phase7` | f32/f64 const/arith/sqrt/min-max/abs-neg-copysign/round/nearest/cmp, all 8 trunc boundaries, converts, reinterprets, NaN propagation, memory NaN round-trips, CLI f32 run + dump | 357 |
 
 ## Architecture
@@ -205,6 +215,7 @@ Standalone `assert`-style suites, no test framework. Current status:
 | Host callbacks | 16 (31-char names) | `WASM_TRAP_INVALID_ARGUMENT` |
 | CLI input file | 64 KiB | usage error |
 | Branch labels | open depth | `WASM_TRAP_INVALID_BLOCK_LABEL` |
+| br_table labels | 256 (`WASM_MAX_BR_TABLE_LABELS`, `-D` overridable) | `WASM_TRAP_INVALID_ARGUMENT` |
 
 ## Memory footprint
 
@@ -247,10 +258,12 @@ was deleted. `Plan.md` (referenced above and in Layout) is absent from the
 source dump, so it is not tracked; `PROJECT_ARCHITECTURE.md` (forensic
 analysis found in the dump) is tracked.
 
-Still missing as of this baseline (float arithmetic since closed, see above): `br_table`,
-`select`, globals, tables, data section, start section, module validation
+Still missing as of this baseline (float arithmetic and br_table/select
+since closed, see above):
+globals, tables, data section, start section, module validation
 beyond header/sections/imports, fuzzing, CI. Known deviation: a function
 body's trailing `end` byte traps (`WASM_TRAP_CONTROL_STACK_UNDERFLOW` —
 no implicit function-level block), so tool-produced modules must be emitted
-without it, as `demo/add.wasm` already is. Fixed capacity constants are not
-yet `#ifndef`-guarded (invariant I5 gap, pre-existing).
+without it, as `demo/add.wasm` already is. Older capacity constants are not
+yet `#ifndef`-guarded (invariant I5 gap, pre-existing); the new
+`WASM_MAX_BR_TABLE_LABELS` is guarded and `-D` overridable.
