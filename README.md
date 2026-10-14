@@ -70,6 +70,16 @@ anywhere**, verified by audit. All builds are warning-free under
   the host has no table concept, so a module importing a table cannot
   link. Only one defined table is supported, and only the first data /
   element section is applied if several are present.
+- Memory imports are rejected (`WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED`):
+  the host has no memory object to bind, so a module importing a memory
+  cannot link (accepting it would silently misdirect `memory.size`,
+  `memory.grow`, and data segments). Memory exports are accepted but
+  inert. At most one table and at most one memory; duplicates are
+  malformed, never silently shadowed.
+- Function bodies must end with an explicit function-level `end` (`0x0B`)
+  byte (MVP strictness — there is no implicit-end deviation); bodies that
+  fall off the code window are rejected as malformed. At runtime a
+  function-level `end` is a no-op marker and never traps.
 
 ## Layout
 
@@ -128,7 +138,7 @@ Run an exported function (defaults to `main`), passing i32 arguments:
 
 ```powershell
 .\build\wasm_runner.exe demo\add.wasm main 3 4
-# [load] 41 bytes from 'demo\add.wasm'
+# [load] 42 bytes from 'demo\add.wasm'
 # [parse] header ok
 # [link] 1 function(s)
 # [export] 'main' -> func 0
@@ -149,7 +159,7 @@ Float demo (`fadd.wasm` computes `1.5 + 2.5` with no arguments):
 
 ```powershell
 .\build\wasm_runner.exe demo\fadd.wasm main
-# [load] 45 bytes from 'demo\fadd.wasm'
+# [load] 46 bytes from 'demo\fadd.wasm'
 # [parse] header ok
 # [link] 1 function(s)
 # [export] 'main' -> func 0
@@ -252,7 +262,9 @@ usage or I/O failure. Typed arguments use `--arg i32:5`, `--arg i64:-1`,
 hexadecimal integer, for example `--arg f32:0x3f800000` and
 `--arg f64:0x3ff0000000000000`. `--quiet` suppresses banners. `--result-line`
 prints exactly one `RESULT ...` line for machine consumers. `--version`
-prints `1.0.0`.
+prints `1.0.0`. Every module is statically validated before linking;
+validation failure exits 1 with `error: validation: NAME` on stderr.
+`--no-validate` skips that check (the module may then trap at runtime).
 
 ## Conformance and fuzz tooling
 
@@ -281,7 +293,7 @@ host does not provide those libraries, while the committed Ubuntu CI jobs use
 native GCC and Clang sanitizer runtimes.
 
 ```
-# [load] 125 bytes from 'demo\hello.wasm'
+# [load] 126 bytes from 'demo\hello.wasm'
 # [parse] header ok
 # [link] 2 function(s)
 # [export] 'main' -> func 1
@@ -304,12 +316,12 @@ Inspect a module without executing it:
 .\build\wasm_runner.exe --dump demo\add.wasm
 # [dump] magic: 00 61 73 6d
 # [dump] version: 1
-# [dump] size: 41 bytes
+# [dump] size: 42 bytes
 # [dump] sections:
 # [dump]   id=1 name=Type header_off=8 payload_off=10 payload_len=7
 # [dump]   id=3 name=Function header_off=17 payload_off=19 payload_len=2
 # [dump]   id=7 name=Export header_off=21 payload_off=23 payload_len=8
-# [dump]   id=10 name=Code header_off=31 payload_off=33 payload_len=8
+# [dump]   id=10 name=Code header_off=31 payload_off=33 payload_len=9
 # [dump] types: 1
 # [dump]   functype 0: params[i32, i32] results[i32]
 # [dump] exports: 1

@@ -474,6 +474,12 @@ static void test_select_f64(void)
 static void test_select_traps(void)
 {
     printf("[T] select type mismatches trap\n");
+    { /* condition is i64, not i32 */
+        static const uint8_t k[] = { 0x41, 0x01, 0x41, 0x02, 0x42, 0x01,
+                                     0x1B };
+        CHECK(run_flat(k, sizeof(k)) == WASM_TRAP_TYPE_MISMATCH,
+              "select cond i64 traps");
+    }
     { /* v2=i64, v1=i32 */
         static const uint8_t k[] = { 0x42, 0x01, 0x41, 0x02, 0x41, 0x01,
                                      0x1B };
@@ -539,6 +545,48 @@ static void test_select_stack(void)
     }
 }
 
+/* ---------- drop + nop (MVP parametric / no-op) ---------- */
+
+static void test_drop(void)
+{
+    printf("[T] drop + nop execution\n");
+    { /* drop after const: one value consumed exactly */
+        static const uint8_t k[] = { 0x41, 0x2A, 0x1A, 0x41, 0x07 };
+        CHECK(run_flat(k, sizeof(k)) == WASM_TRAP_OK, "run drop after const");
+        CHECK(wasm_stack_depth(&g_vm.operands) == 1u, "drop pops exactly one");
+        expect_i32(7, "survivor after drop correct");
+    }
+    { /* nop leaves the stack untouched */
+        static const uint8_t k[] = { 0x01, 0x41, 0x05, 0x01 };
+        CHECK(run_flat(k, sizeof(k)) == WASM_TRAP_OK, "run nops");
+        CHECK(wasm_stack_depth(&g_vm.operands) == 1u, "nop keeps depth");
+        expect_i32(5, "value after nops correct");
+    }
+    { /* drop inside a block, then branch out */
+        static const uint8_t k[] = { 0x02, 0x40, 0x41, 0x09, 0x1A, 0x0B,
+                                     0x41, 0x03 };
+        CHECK(run_flat(k, sizeof(k)) == WASM_TRAP_OK, "run drop in block");
+        CHECK(wasm_stack_depth(&g_vm.operands) == 1u, "block drop depth");
+        expect_i32(3, "value after block drop correct");
+    }
+    { /* bare drop traps cleanly, stack stays empty */
+        static const uint8_t k[] = { 0x1A };
+        CHECK(run_flat(k, sizeof(k)) == WASM_TRAP_STACK_UNDERFLOW,
+              "bare drop underflows");
+        CHECK(wasm_stack_depth(&g_vm.operands) == 0u, "stack empty after trap");
+    }
+    { /* drop discards the top, deeper values survive in order */
+        static const uint8_t k[] = { 0x41, 0x01, 0x41, 0x02, 0x1A };
+        CHECK(run_flat(k, sizeof(k)) == WASM_TRAP_OK, "run stacked drop");
+        CHECK(wasm_stack_depth(&g_vm.operands) == 1u, "one survivor");
+        expect_i32(1, "drop keeps deeper value");
+    }
+    { /* enum spellings keep the matrix honest about coverage */
+        CHECK((uint8_t)OP_DROP == 0x1Au && (uint8_t)OP_NOP == 0x01u,
+              "OP_DROP/OP_NOP encodings");
+    }
+}
+
 /* ---------- CLI run of the dispatch demo ---------- */
 
 static void test_cli_dispatch(void)
@@ -597,6 +645,7 @@ int main(void)
     test_select_f64();
     test_select_traps();
     test_select_stack();
+    test_drop();
     test_cli_dispatch();
     printf("--------------------------------------------\n");
     printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);

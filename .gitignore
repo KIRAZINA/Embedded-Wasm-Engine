@@ -1,6 +1,11 @@
 # Build tree (generated binaries, never committed)
 build/
 
+# Official spec corpus working tree (reproduced by tools/fetch_spec_tests.sh)
+tests/spec/upstream/
+tests/spec/json/
+tests/spec/*.wasm
+
 # Compiled objects / archives / dependency files
 *.o
 *.obj

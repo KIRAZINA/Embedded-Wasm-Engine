@@ -635,6 +635,27 @@ static void test_cmp64(void)
     c[n++] = 0x66u;
     CHECK(run_flat(c, n) == WASM_TRAP_OK, "run ge -0/+0 f64");
     expect_i32(1, "-0 >= +0 f64");
+    /* Enum-spelled so the opcode matrix credits f64.eq/gt/le coverage. */
+    n = emit_f64(c, 0x4004000000000000ULL);
+    n += emit_f64(c + n, 0x4004000000000000ULL);
+    c[n++] = (uint8_t)OP_F64_EQ;
+    CHECK(run_flat(c, n) == WASM_TRAP_OK, "run f64.eq self");
+    expect_i32(1, "2.5 == 2.5 f64");
+    n = emit_f64(c, 0x4014000000000000ULL);
+    n += emit_f64(c + n, 0x4004000000000000ULL);
+    c[n++] = (uint8_t)OP_F64_GT;
+    CHECK(run_flat(c, n) == WASM_TRAP_OK, "run f64.gt");
+    expect_i32(1, "5.0 > 2.5 f64");
+    n = emit_f64(c, 0x4004000000000000ULL);
+    n += emit_f64(c + n, 0x4014000000000000ULL);
+    c[n++] = (uint8_t)OP_F64_LE;
+    CHECK(run_flat(c, n) == WASM_TRAP_OK, "run f64.le");
+    expect_i32(1, "2.5 <= 5.0 f64");
+    n = emit_f64(c, 0x7FF8000000000001ULL);
+    n += emit_f64(c + n, 0x7FF8000000000001ULL);
+    c[n++] = (uint8_t)OP_F64_EQ;
+    CHECK(run_flat(c, n) == WASM_TRAP_OK, "run f64.eq NaN");
+    expect_i32(0, "NaN == NaN false f64");
 }
 
 /* ---------- i) trunc conversions, exact boundaries (S4) ---------- */
@@ -910,6 +931,26 @@ static void test_convert(void)
     c[2] = 0xB7u;
     CHECK(run_flat(c, 3u) == WASM_TRAP_OK, "run f64.convert(-1)");
     expect_f64_bits(0xBFF0000000000000ULL, "f64.convert(-1) == -1.0");
+    /* Previously untested converts, enum-spelled for matrix credit. */
+    c[0] = 0x41u; c[1] = 0x7Fu; /* i32.const -1 = 4294967295u */
+    c[2] = (uint8_t)OP_F64_CONVERT_I32_U;
+    CHECK(run_flat(c, 3u) == WASM_TRAP_OK, "run f64.convert_u(-1)");
+    expect_f64_bits(0x41EFFFFFFFE00000ULL, "f64.convert_u == 4294967295.0");
+    { /* f32.convert_i64_u of UINT64_MAX rounds to 2^64 (exact f32) */
+        static const uint8_t k[] = { 0x42, 0x7F, (uint8_t)OP_F32_CONVERT_I64_U };
+        CHECK(run_flat(k, sizeof(k)) == WASM_TRAP_OK,
+              "run f32.convert_u(UINT64_MAX)");
+        expect_f32_bits(0x5F800000u, "f32.convert_u max == 2^64");
+    }
+    { /* f64.convert_i64_s of INT64_MIN is exact */
+        static const uint8_t k[] = {
+            0x42, 0x80, 0x80, 0x80, 0x80, 0x80,
+            0x80, 0x80, 0x80, 0x80, 0x7F, (uint8_t)OP_F64_CONVERT_I64_S
+        };
+        CHECK(run_flat(k, sizeof(k)) == WASM_TRAP_OK,
+              "run f64.convert(INT64_MIN)");
+        expect_f64_bits(0xC3E0000000000000ULL, "f64.convert min == -2^63");
+    }
 }
 
 /* ---------- k) reinterpret round-trips (S6) ---------- */

@@ -10,9 +10,11 @@ static unsigned fail_count;
 #ifdef _WIN32
 #define RUNNER "build\\wasm_runner.exe"
 #define REDIR " > build\\phase12_cli.txt 2>&1"
+#define OP_MATRIX "python tools\\opcode_matrix.py"
 #else
 #define RUNNER "./build/wasm_runner"
 #define REDIR " > build/phase12_cli.txt 2>&1"
+#define OP_MATRIX "python3 tools/opcode_matrix.py"
 #endif
 
 static int output_contains(const char *want, int exact_one_line)
@@ -46,6 +48,8 @@ int main(void)
     CHECK(rc != 0 && output_contains("type does not match", 0), "f32 typed argument parsed");
     rc = system(RUNNER " --quiet demo/add.wasm main --arg f64:0x3ff0000000000000 --arg f64:2e10" REDIR);
     CHECK(rc != 0 && output_contains("type does not match", 0), "f64 typed argument parsed");
+    rc = system(OP_MATRIX);
+    CHECK(rc == 0, "opcode matrix generator");
     printf("RESULT: %u passed, %u failed\n", pass_count, fail_count);
     printf("STATUS: %s\n", fail_count == 0u ? "ALL TESTS PASSED" : "FAIL");
     return fail_count == 0u ? 0 : 1;

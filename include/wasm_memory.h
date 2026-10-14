@@ -52,6 +52,9 @@ uint64_t wasm_memory_size_bytes(const wasm_memory_t *m);
 wasm_trap_t wasm_memory_load_u8(const wasm_memory_t *m, uint32_t offset, uint8_t *out);
 wasm_trap_t wasm_memory_store_u8(wasm_memory_t *m, uint32_t offset, uint8_t v);
 
+wasm_trap_t wasm_memory_load_u16(const wasm_memory_t *m, uint32_t offset, uint16_t *out);
+wasm_trap_t wasm_memory_store_u16(wasm_memory_t *m, uint32_t offset, uint16_t v);
+
 wasm_trap_t wasm_memory_load_i32(const wasm_memory_t *m, uint32_t offset, int32_t *out);
 wasm_trap_t wasm_memory_store_i32(wasm_memory_t *m, uint32_t offset, int32_t v);
 

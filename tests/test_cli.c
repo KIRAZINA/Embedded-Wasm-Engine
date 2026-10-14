@@ -6,13 +6,13 @@
  * INT64_MIN (10-byte SLEB128 immediate, negation-overflow edge in the
  * decimal renderer) and -1 (sign path).
  *
- * Module layout mirrors demo/add.wasm conventions, in particular: the code
- * body carries NO trailing 0x0B end byte, matching what the engine executes
- * (a top-level OP_END would pop an empty control stack and trap).
+ * Module layout mirrors demo/add.wasm conventions; every code body carries
+ * the explicit MVP function-end 0x0B byte required by strict validation.
  *
  * Layout per module:
  *   header(8) | type(01 05 01 60 00 01 7E) | func(03 02 01 00)
- *   | export(07 08 01 04 "main" 00 00) | code(0A .. 01 <body_size> 00 42 <sleb>)
+ *   | export(07 08 01 04 "main" 00 00) | code(0A .. 01 <body_size> 00 42 <sleb> 0B)
+ * Bodies carry the explicit MVP function-end 0x0B (strict validation).
  *
  * Build: gcc -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude \
  *            tests/test_cli.c -o build/test_cli
@@ -40,22 +40,32 @@ static int g_fail = 0;
 #define SEP "/"
 #endif
 
-/* () -> (i64) returning 42. Body: 00 (no locals) 42 2A (i64.const 42). */
+/* () -> (i64) returning 42. Body: 00 (no locals) 42 2A (i64.const 42) 0B. */
 static const unsigned char kMod42[] = {
     0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
     0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7E,
     0x03, 0x02, 0x01, 0x00,
     0x07, 0x08, 0x01, 0x04, 0x6D, 0x61, 0x69, 0x6E, 0x00, 0x00,
-    0x0A, 0x05, 0x01, 0x03, 0x00, 0x42, 0x2A
+    0x0A, 0x06, 0x01, 0x04, 0x00, 0x42, 0x2A, 0x0B
 };
 
-/* () -> (i64) returning -1. Body: 00 42 7F (i64.const -1). */
+/* () -> (i64) returning -1. Body: 00 42 7F (i64.const -1) 0B. */
 static const unsigned char kModNeg1[] = {
     0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
     0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7E,
     0x03, 0x02, 0x01, 0x00,
     0x07, 0x08, 0x01, 0x04, 0x6D, 0x61, 0x69, 0x6E, 0x00, 0x00,
-    0x0A, 0x05, 0x01, 0x03, 0x00, 0x42, 0x7F
+    0x0A, 0x06, 0x01, 0x04, 0x00, 0x42, 0x7F, 0x0B
+};
+
+/* () -> (i64) with an undecodable opcode body: validator must reject it,
+ * while --no-validate proceeds into a runtime UNKNOWN_OPCODE trap. */
+static const unsigned char kModBadOp[] = {
+    0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7E,
+    0x03, 0x02, 0x01, 0x00,
+    0x07, 0x08, 0x01, 0x04, 0x6D, 0x61, 0x69, 0x6E, 0x00, 0x00,
+    0x0A, 0x05, 0x01, 0x03, 0x00, 0xFF, 0x0B
 };
 
 /* () -> (i64) returning INT64_MIN.
@@ -65,8 +75,8 @@ static const unsigned char kModMin[] = {
     0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7E,
     0x03, 0x02, 0x01, 0x00,
     0x07, 0x08, 0x01, 0x04, 0x6D, 0x61, 0x69, 0x6E, 0x00, 0x00,
-    0x0A, 0x0E, 0x01, 0x0C, 0x00, 0x42,
-    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7F
+    0x0A, 0x0F, 0x01, 0x0D, 0x00, 0x42,
+    0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x7F, 0x0B
 };
 
 static void run_case(const char *tag, const unsigned char *mod, size_t mod_len,
@@ -105,6 +115,113 @@ static void run_case(const char *tag, const unsigned char *mod, size_t mod_len,
     CHECK(strstr(out, want) != NULL, "exact i64 result line printed");
 }
 
+/* Module importing a memory ("env"."mem", min 1): no host memory object
+ * exists, so the validator must reject it with a typed error. */
+static const unsigned char kModMemImport[] = {
+    0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+    0x02, 0x0C, 0x01, 0x03, 0x65, 0x6E, 0x76,
+    0x03, 0x6D, 0x65, 0x6D, 0x02, 0x00, 0x01,
+    0x03, 0x02, 0x01, 0x00,
+    0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B
+};
+
+static void test_validation(void)
+{
+    char wasm_path[128];
+    char out_path[128];
+    char cmd[384];
+    char out[1024];
+    FILE *fp = NULL;
+    size_t n = 0u;
+    size_t w = 0u;
+    int rc;
+
+    printf("[T] CLI validates by default, --no-validate bypasses\n");
+    sprintf(wasm_path, "build%scli_badop.wasm", SEP);
+    sprintf(out_path, "build%scli_badop.txt", SEP);
+    fp = fopen(wasm_path, "wb");
+    CHECK(fp != NULL, "bad-op wasm file opened for writing");
+    if (fp == NULL) {
+        return;
+    }
+    w = fwrite(kModBadOp, 1u, sizeof(kModBadOp), fp);
+    fclose(fp);
+    CHECK(w == sizeof(kModBadOp), "bad-op wasm bytes fully written");
+
+    /* Default path: static validation rejects before linking/running. */
+    sprintf(cmd, "%s %s main > %s 2>&1", RUNNER, wasm_path, out_path);
+    rc = system(cmd);
+    CHECK(rc != 0, "invalid module rejected by default (nonzero exit)");
+    fp = fopen(out_path, "rb");
+    CHECK(fp != NULL, "rejection output captured");
+    if (fp == NULL) {
+        return;
+    }
+    n = fread(out, 1u, sizeof(out) - 1u, fp);
+    fclose(fp);
+    out[n] = '\0';
+    CHECK(strstr(out, "validation:") != NULL, "stderr names validation");
+    CHECK(strstr(out, "WASM_ERR_INVALID_SECTION") != NULL,
+          "validator error string printed");
+
+    /* Bypass path: validation skipped, the bad opcode traps at runtime. */
+    sprintf(cmd, "%s --no-validate %s main > %s 2>&1", RUNNER, wasm_path,
+            out_path);
+    rc = system(cmd);
+    CHECK(rc != 0, "--no-validate still fails, but at runtime");
+    fp = fopen(out_path, "rb");
+    CHECK(fp != NULL, "trap output captured");
+    if (fp == NULL) {
+        return;
+    }
+    n = fread(out, 1u, sizeof(out) - 1u, fp);
+    fclose(fp);
+    out[n] = '\0';
+    CHECK(strstr(out, "validation:") == NULL, "no validation message");
+    CHECK(strstr(out, "WASM_TRAP_UNKNOWN_OPCODE") != NULL,
+          "runtime trap reported instead");
+}
+
+static void test_mem_import(void)
+{
+    char wasm_path[128];
+    char out_path[128];
+    char cmd[384];
+    char out[1024];
+    FILE *fp = NULL;
+    size_t n = 0u;
+    size_t w = 0u;
+    int rc;
+
+    printf("[T] CLI rejects memory imports with a typed error\n");
+    sprintf(wasm_path, "build%scli_memimport.wasm", SEP);
+    sprintf(out_path, "build%scli_memimport.txt", SEP);
+    fp = fopen(wasm_path, "wb");
+    CHECK(fp != NULL, "memimport wasm file opened for writing");
+    if (fp == NULL) {
+        return;
+    }
+    w = fwrite(kModMemImport, 1u, sizeof(kModMemImport), fp);
+    fclose(fp);
+    CHECK(w == sizeof(kModMemImport), "memimport wasm bytes fully written");
+
+    sprintf(cmd, "%s %s main > %s 2>&1", RUNNER, wasm_path, out_path);
+    rc = system(cmd);
+    CHECK(rc != 0, "memory import rejected (nonzero exit)");
+    fp = fopen(out_path, "rb");
+    CHECK(fp != NULL, "rejection output captured");
+    if (fp == NULL) {
+        return;
+    }
+    n = fread(out, 1u, sizeof(out) - 1u, fp);
+    fclose(fp);
+    out[n] = '\0';
+    CHECK(strstr(out, "validation:") != NULL, "stderr names validation");
+    CHECK(strstr(out, "WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED") != NULL,
+          "typed unsupported-memory error printed");
+}
+
 int main(void)
 {
     printf("=== CLI tests: runner i64 result printing ===\n");
@@ -112,6 +229,8 @@ int main(void)
     run_case("neg1", kModNeg1, sizeof(kModNeg1), "result: -1 (i64)");
     run_case("min", kModMin, sizeof(kModMin),
              "result: -9223372036854775808 (i64)");
+    test_validation();
+    test_mem_import();
     printf("--------------------------------------------\n");
     printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
     if (g_fail != 0) {

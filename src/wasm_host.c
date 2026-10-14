@@ -288,6 +288,59 @@ wasm_err_t wasm_get_export_func_index(const wasm_slice_t *export_payload,
     return WASM_ERR_EXPORT_NOT_FOUND;
 }
 
+wasm_err_t wasm_get_export_global_index(const wasm_slice_t *export_payload,
+                                        const char *name, uint32_t *out_idx)
+{
+    const uint8_t *cur, *end;
+    uint32_t count, i;
+    size_t want;
+    wasm_err_t rc;
+
+    if (export_payload == NULL || name == NULL || out_idx == NULL) {
+        return WASM_ERR_NULL;
+    }
+    if (export_payload->len > 0u && export_payload->data == NULL) {
+        return WASM_ERR_NULL;
+    }
+    if (export_payload->len == 0u) {
+        return WASM_ERR_EXPORT_NOT_FOUND;
+    }
+    cur = export_payload->data;
+    end = export_payload->data + export_payload->len;
+    rc = leb128_decode_u32(&cur, end, &count);
+    if (rc != WASM_OK) {
+        return rc;
+    }
+    want = strlen(name);
+    for (i = 0u; i < count; i++) {
+        uint32_t nlen, kind, idx;
+        const uint8_t *nm;
+        rc = leb128_decode_u32(&cur, end, &nlen);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        if (!readable(cur, end, nlen)) {
+            return WASM_ERR_TRUNCATED;
+        }
+        nm = cur;
+        cur += nlen;
+        if (!readable(cur, end, 1u)) {
+            return WASM_ERR_TRUNCATED;
+        }
+        kind = *cur++;
+        rc = leb128_decode_u32(&cur, end, &idx);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        if (kind == 0x03u && (uint64_t)nlen == (uint64_t)want &&
+            (want == 0u || memcmp(nm, name, want) == 0)) {
+            *out_idx = idx;
+            return WASM_OK;
+        }
+    }
+    return WASM_ERR_EXPORT_NOT_FOUND;
+}
+
 /* Skip one MVP limits field: flags, min, [max]. */
 static wasm_err_t skip_limits(const uint8_t **pp, const uint8_t *end)
 {
@@ -540,11 +593,11 @@ wasm_err_t wasm_bind_imports(const wasm_slice_t *import_payload,
             /* tables: the host has no table concept (deliberate MVP cut). */
             return WASM_ERR_IMPORTED_TABLES_UNSUPPORTED;
         } else if (kind == 0x02u) {
-            /* memory: limits */
-            rc = skip_limits(&cur, end);
-            if (rc != WASM_OK) {
-                return rc;
-            }
+            /* memories: the host has no memory object to bind them to
+             * (deliberate MVP cut, like tables). Reject instead of
+             * silently skipping: skipping would link a module whose
+             * memory.size/grow/data segments act on the wrong memory. */
+            return WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED;
         } else if (kind == 0x03u) {
             /* global: valtype + mutability */
             if (!readable(cur, end, 2u)) {
@@ -807,27 +860,34 @@ static wasm_err_t check_data_bounds(const wasm_memory_t *mem, uint32_t offset,
     return WASM_OK;
 }
 
-/* Parse one data segment header at *pp: memidx==0, i32 offset expr, length.
- * The byte window is borrowed via *out_bytes WITHOUT advancing past it;
- * callers advance *pp by len themselves after their own checks. This lets
- * pass 1 report bounds failures (DATA_OUT_OF_BOUNDS) even when the file
- * is also too short to contain the bytes. */
+/* Parse one data segment header: flags 0 (offset, length; memory 0
+ * implied) or flags 2 (explicit memidx, must be 0; then offset, length).
+ * Passive segments (1) need bulk-memory: reject. See parse_data_seg note
+ * about the borrowed byte window. */
 static wasm_err_t parse_data_seg(const uint8_t **pp, const uint8_t *end,
                                  const wasm_vm_t *vm, uint32_t nimportglobals,
                                  uint32_t *out_offset, uint32_t *out_len,
                                  const uint8_t **out_bytes)
 {
-    uint32_t memidx = 0u, len = 0u;
+    uint32_t flags = 0u, memidx = 0u, len = 0u;
     wasm_val_t off;
     wasm_err_t rc;
     off.type = WASM_TYPE_I32;
     off.value.i32 = 0;
-    rc = leb128_decode_u32(pp, end, &memidx);
+    rc = leb128_decode_u32(pp, end, &flags);
     if (rc != WASM_OK) {
         return rc;
     }
-    if (memidx != 0u) {
-        return WASM_ERR_INVALID_SECTION; /* MVP has exactly one memory */
+    if (flags == 2u) {
+        rc = leb128_decode_u32(pp, end, &memidx);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        if (memidx != 0u) {
+            return WASM_ERR_INVALID_SECTION; /* MVP has exactly one memory */
+        }
+    } else if (flags != 0u) {
+        return WASM_ERR_INVALID_SECTION;
     }
     rc = eval_init_expr(pp, end, vm->globals, nimportglobals, &off);
     if (rc != WASM_OK) {
@@ -909,24 +969,40 @@ static wasm_err_t apply_data(wasm_vm_t *vm, const wasm_slice_t *datap,
     return WASM_OK;
 }
 
-/* Parse one element segment header: tableidx==0, i32 offset expr, length.
- * The funcidx vector is NOT consumed here; callers walk it themselves
- * (pass 1 validates, pass 2 writes). */
+/* Parse one element segment header: flags 0 (tableidx, offset, funcref
+ * vec), flags 2 (tableidx, offset, elemkind 0x00, funcref vec), or
+ * flags 4 (offset, vec of `ref.func idx end` init exprs). Table 0 and an
+ * i32 offset are required throughout; anything else is INVALID_SECTION.
+ * *out_ref is 1 for flags 4 (elements are triples, not plain ULEBs).
+ * The funcidx vector is NOT consumed here; callers walk it with
+ * parse_elem_entry (pass 1 validates, pass 2 writes). */
 static wasm_err_t parse_elem_seg(const uint8_t **pp, const uint8_t *end,
                                  const wasm_vm_t *vm, uint32_t nimportglobals,
-                                 uint32_t *out_offset, uint32_t *out_len)
+                                 uint32_t *out_offset, uint32_t *out_len,
+                                 int *out_ref)
 {
-    uint32_t tableidx = 0u, len = 0u;
+    uint32_t flags = 0u, tableidx = 0u, len = 0u;
     wasm_val_t off;
     wasm_err_t rc;
     off.type = WASM_TYPE_I32;
     off.value.i32 = 0;
-    rc = leb128_decode_u32(pp, end, &tableidx);
+    rc = leb128_decode_u32(pp, end, &flags);
     if (rc != WASM_OK) {
         return rc;
     }
-    if (tableidx != 0u) {
-        return WASM_ERR_INVALID_SECTION; /* MVP has exactly one table */
+    if (flags == 0u || flags == 2u) {
+        rc = leb128_decode_u32(pp, end, &tableidx);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        if (tableidx != 0u) {
+            return WASM_ERR_INVALID_SECTION; /* MVP has exactly one table */
+        }
+        *out_ref = 0;
+    } else if (flags == 4u) {
+        *out_ref = 1;
+    } else {
+        return WASM_ERR_INVALID_SECTION;
     }
     rc = eval_init_expr(pp, end, vm->globals, nimportglobals, &off);
     if (rc != WASM_OK) {
@@ -935,12 +1011,46 @@ static wasm_err_t parse_elem_seg(const uint8_t **pp, const uint8_t *end,
     if (off.type != WASM_TYPE_I32) {
         return WASM_ERR_INVALID_SECTION; /* offset must evaluate to i32 */
     }
+    if (flags == 2u) {
+        uint8_t elemkind;
+        if (!readable(*pp, end, 1u)) {
+            return WASM_ERR_TRUNCATED;
+        }
+        elemkind = *(*pp)++;
+        if (elemkind != 0x00u) {
+            return WASM_ERR_INVALID_SECTION; /* funcref only */
+        }
+    }
     rc = leb128_decode_u32(pp, end, &len);
     if (rc != WASM_OK) {
         return rc;
     }
     *out_offset = (uint32_t)off.value.i32;
     *out_len = len;
+    return WASM_OK;
+}
+
+/* Decode one element entry: a plain ULEB funcidx, or (when is_ref) a
+ * `ref.func idx end` triple. Advances *pp past the entry. */
+static wasm_err_t parse_elem_entry(const uint8_t **pp, const uint8_t *end,
+                                   int is_ref, uint32_t *out_fidx)
+{
+    wasm_err_t rc;
+    if (!is_ref) {
+        return leb128_decode_u32(pp, end, out_fidx);
+    }
+    if (!readable(*pp, end, 1u) || **pp != 0xD2u) {
+        return WASM_ERR_INVALID_SECTION; /* not a ref.func entry */
+    }
+    (*pp)++;
+    rc = leb128_decode_u32(pp, end, out_fidx);
+    if (rc != WASM_OK) {
+        return rc;
+    }
+    if (!readable(*pp, end, 1u) || **pp != 0x0Bu) {
+        return WASM_ERR_INVALID_SECTION; /* unterminated entry */
+    }
+    (*pp)++;
     return WASM_OK;
 }
 
@@ -979,7 +1089,9 @@ static wasm_err_t apply_elements(wasm_vm_t *vm, const wasm_slice_t *elemp,
     }
     for (i = 0u; i < count; i++) {
         uint32_t offset = 0u, len = 0u, k;
-        rc = parse_elem_seg(&cur, end, vm, nimportglobals, &offset, &len);
+        int is_ref = 0;
+        rc = parse_elem_seg(&cur, end, vm, nimportglobals, &offset, &len,
+                            &is_ref);
         if (rc != WASM_OK) {
             return rc;
         }
@@ -989,7 +1101,7 @@ static wasm_err_t apply_elements(wasm_vm_t *vm, const wasm_slice_t *elemp,
         }
         for (k = 0u; k < len; k++) {
             uint32_t fidx = 0u;
-            rc = leb128_decode_u32(&cur, end, &fidx);
+            rc = parse_elem_entry(&cur, end, is_ref, &fidx);
             if (rc != WASM_OK) {
                 return rc;
             }
@@ -1009,13 +1121,15 @@ static wasm_err_t apply_elements(wasm_vm_t *vm, const wasm_slice_t *elemp,
     }
     for (i = 0u; i < count; i++) {
         uint32_t offset = 0u, len = 0u, k;
-        rc = parse_elem_seg(&cur, end, vm, nimportglobals, &offset, &len);
+        int is_ref = 0;
+        rc = parse_elem_seg(&cur, end, vm, nimportglobals, &offset, &len,
+                            &is_ref);
         if (rc != WASM_OK) {
             return rc; /* unreachable: pass 1 accepted */
         }
         for (k = 0u; k < len; k++) {
             uint32_t fidx = 0u;
-            rc = leb128_decode_u32(&cur, end, &fidx);
+            rc = parse_elem_entry(&cur, end, is_ref, &fidx);
             if (rc != WASM_OK) {
                 return rc; /* unreachable: pass 1 accepted */
             }
@@ -1515,6 +1629,11 @@ wasm_err_t wasm_get_memory_min(const wasm_module_t *mod,
     rc = leb128_decode_u32(&cur, end, &count);
     if (rc != WASM_OK) {
         return rc;
+    }
+    if (count > 1u) {
+        /* MVP allows at most one memory; extras would be silently
+         * shadowed by first-match (same rule the validator enforces). */
+        return WASM_ERR_INVALID_SECTION;
     }
     if (count == 0u) {
         *out_min = 0u;

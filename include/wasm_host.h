@@ -103,6 +103,11 @@ wasm_trap_t wasm_host_register_global(wasm_host_registry_t *r,
 wasm_err_t wasm_get_export_func_index(const wasm_slice_t *export_payload,
                                       const char *name, uint32_t *out_idx);
 
+/* Look up a global export by exact name (kind must be 0x03).
+ * Absent/empty payload or no match -> WASM_ERR_EXPORT_NOT_FOUND. */
+wasm_err_t wasm_get_export_global_index(const wasm_slice_t *export_payload,
+                                        const char *name, uint32_t *out_idx);
+
 /* Map each function import (in order) to its registry slot.
  * type_payload may be NULL (signature check skipped); otherwise each
  * import's functype counts must equal the registry entry's, else
