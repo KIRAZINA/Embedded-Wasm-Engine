@@ -68,9 +68,11 @@ static wasm_trap_t host_print_i32(struct wasm_vm *vm,
 
 static void usage(const char *prog)
 {
-    fprintf(stderr, "usage: %s [--quiet] [--result-line] <file.wasm> [export] [--arg TYPE:VALUE ...]\n", prog);
+    fprintf(stderr, "usage: %s [--quiet] [--result-line] [--no-validate] <file.wasm> [export] [--arg TYPE:VALUE ...]\n", prog);
     fprintf(stderr, "       %s --dump <file.wasm>\n", prog);
     fprintf(stderr, "       %s --version\n", prog);
+    fprintf(stderr, "note: modules are statically validated before linking;\n");
+    fprintf(stderr, "      --no-validate skips that check (runtime traps still apply).\n");
 }
 
 /* Strict i32 parse: no trailing garbage, no overflow. */
@@ -490,6 +492,7 @@ int main(int argc, char **argv)
     uint32_t cli_nargs = 0u;
     int argi = 1;
     int dump_mode = 0;
+    int no_validate = 0;
 
     if (argc < 2) {
         usage(argv[0]);
@@ -505,6 +508,9 @@ int main(int argc, char **argv)
         }
         if (strcmp(argv[argi], "--result-line") == 0) {
             g_result_line = 1; g_quiet = 1; argi++; continue;
+        }
+        if (strcmp(argv[argi], "--no-validate") == 0) {
+            no_validate = 1; argi++; continue;
         }
         if (strcmp(argv[argi], "--dump") == 0) {
             dump_mode = 1; argi++; break;
@@ -527,6 +533,9 @@ int main(int argc, char **argv)
         }
         if (strcmp(value, "--result-line") == 0) {
             g_result_line = 1; g_quiet = 1; argi++; continue;
+        }
+        if (strcmp(value, "--no-validate") == 0) {
+            no_validate = 1; argi++; continue;
         }
         if (strcmp(value, "--arg") == 0) {
             if (argi + 1 >= argc || cli_nargs >= (uint32_t)WASM_MAX_LOCALS_PER_FRAME ||
@@ -606,15 +615,18 @@ int main(int argc, char **argv)
         return dump_module(g_file_buf, nread, &mod);
     }
 
-    /* Validation is a precondition of the execution pipeline.  Keep
-     * --dump structural-only, while normal execution rejects every invalid
-     * module before host registration, linking, segment writes, or start. */
-    ec = wasm_validate_module(&mod);
-    if (ec != WASM_OK) {
-        fprintf(stderr, "error: validation: %s\n", wasm_err_str(ec));
-        return 1;
+    /* Validation is a precondition of the execution pipeline (unless the
+     * caller passes --no-validate). Keep --dump structural-only, while
+     * normal execution rejects every invalid module before host
+     * registration, linking, segment writes, or start. */
+    if (!no_validate) {
+        ec = wasm_validate_module(&mod);
+        if (ec != WASM_OK) {
+            fprintf(stderr, "error: validation: %s\n", wasm_err_str(ec));
+            return 1;
+        }
+        if (!g_quiet) printf("[validate] module ok\n");
     }
-    if (!g_quiet) printf("[validate] module ok\n");
 
     /* c) Host callbacks. */
     tr = wasm_host_registry_init(&g_reg);

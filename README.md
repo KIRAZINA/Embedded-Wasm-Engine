@@ -252,7 +252,9 @@ usage or I/O failure. Typed arguments use `--arg i32:5`, `--arg i64:-1`,
 hexadecimal integer, for example `--arg f32:0x3f800000` and
 `--arg f64:0x3ff0000000000000`. `--quiet` suppresses banners. `--result-line`
 prints exactly one `RESULT ...` line for machine consumers. `--version`
-prints `1.0.0`.
+prints `1.0.0`. Every module is statically validated before linking;
+validation failure exits 1 with `error: validation: NAME` on stderr.
+`--no-validate` skips that check (the module may then trap at runtime).
 
 ## Conformance and fuzz tooling
 
