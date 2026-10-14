@@ -50,7 +50,8 @@ typedef enum {
     WASM_ERR_INVALID_BLOCK,  /* block structure/nesting/result error */
     WASM_ERR_INVALID_LOCAL,  /* local index out of range */
     WASM_ERR_INVALID_GLOBAL, /* global index/mutability error */
-    WASM_ERR_INVALID_ALIGN   /* alignment exceeds the access size */
+    WASM_ERR_INVALID_ALIGN,  /* alignment exceeds the access size */
+    WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED, /* memory imports have no host concept */
 } wasm_err_t;
 
 /* Human-readable error name. Zero-alloc: returns string literals. */
@@ -81,6 +82,8 @@ static inline const char *wasm_err_str(wasm_err_t e)
     case WASM_ERR_INVALID_LOCAL:  return "WASM_ERR_INVALID_LOCAL";
     case WASM_ERR_INVALID_GLOBAL: return "WASM_ERR_INVALID_GLOBAL";
     case WASM_ERR_INVALID_ALIGN:  return "WASM_ERR_INVALID_ALIGN";
+    case WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED:
+        return "WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED";
     default:                       return "WASM_ERR_UNKNOWN";
     }
 }
@@ -289,6 +292,7 @@ typedef wasm_trap_t (*wasm_host_func_t)(struct wasm_vm *vm,
  * Hex values are the exact WebAssembly MVP encodings (section 5.4). */
 typedef enum {
     OP_UNREACHABLE = 0x00,
+    OP_NOP         = 0x01,
     OP_BLOCK       = 0x02,
     OP_LOOP        = 0x03,
     OP_IF          = 0x04,
@@ -300,7 +304,8 @@ typedef enum {
     OP_RETURN      = 0x0F,
     OP_CALL        = 0x10,
     OP_CALL_INDIRECT = 0x11,
-    /* 0x1A (drop) is MVP but not implemented; 0x1B select is. */
+    /* 0x1A drop and 0x1B select: parametric instructions. */
+    OP_DROP        = 0x1A,
     OP_SELECT      = 0x1B,
     OP_LOCAL_GET   = 0x20,
     OP_LOCAL_SET   = 0x21,
@@ -308,7 +313,30 @@ typedef enum {
     OP_GLOBAL_GET  = 0x23,
     OP_GLOBAL_SET  = 0x24,
     OP_I32_LOAD    = 0x28,
+    OP_I64_LOAD    = 0x29,
+    OP_F32_LOAD    = 0x2A,
+    OP_F64_LOAD    = 0x2B,
+    OP_I32_LOAD8_S  = 0x2C,
+    OP_I32_LOAD8_U  = 0x2D,
+    OP_I32_LOAD16_S = 0x2E,
+    OP_I32_LOAD16_U = 0x2F,
+    OP_I64_LOAD8_S  = 0x30,
+    OP_I64_LOAD8_U  = 0x31,
+    OP_I64_LOAD16_S = 0x32,
+    OP_I64_LOAD16_U = 0x33,
+    OP_I64_LOAD32_S = 0x34,
+    OP_I64_LOAD32_U = 0x35,
     OP_I32_STORE   = 0x36,
+    OP_I64_STORE   = 0x37,
+    OP_F32_STORE   = 0x38,
+    OP_F64_STORE   = 0x39,
+    OP_I32_STORE8  = 0x3A,
+    OP_I32_STORE16 = 0x3B,
+    OP_I64_STORE8  = 0x3C,
+    OP_I64_STORE16 = 0x3D,
+    OP_I64_STORE32 = 0x3E,
+    OP_MEMORY_SIZE = 0x3F,
+    OP_MEMORY_GROW = 0x40,
     OP_I32_CONST   = 0x41,
     OP_I64_CONST   = 0x42,
     OP_F32_CONST   = 0x43, /* raw 4-byte LE immediate */
@@ -324,6 +352,17 @@ typedef enum {
     OP_I32_LE_U    = 0x4D,
     OP_I32_GE_S    = 0x4E,
     OP_I32_GE_U    = 0x4F,
+    OP_I64_EQZ     = 0x50,
+    OP_I64_EQ      = 0x51,
+    OP_I64_NE      = 0x52,
+    OP_I64_LT_S    = 0x53,
+    OP_I64_LT_U    = 0x54,
+    OP_I64_GT_S    = 0x55,
+    OP_I64_GT_U    = 0x56,
+    OP_I64_LE_S    = 0x57,
+    OP_I64_LE_U    = 0x58,
+    OP_I64_GE_S    = 0x59,
+    OP_I64_GE_U    = 0x5A,
     OP_F32_EQ      = 0x5B,
     OP_F32_NE      = 0x5C,
     OP_F32_LT      = 0x5D,
@@ -336,6 +375,9 @@ typedef enum {
     OP_F64_GT      = 0x64,
     OP_F64_LE      = 0x65,
     OP_F64_GE      = 0x66,
+    OP_I32_CLZ     = 0x67,
+    OP_I32_CTZ     = 0x68,
+    OP_I32_POPCNT  = 0x69,
     OP_I32_ADD     = 0x6A,
     OP_I32_SUB     = 0x6B,
     OP_I32_MUL     = 0x6C,
@@ -349,6 +391,11 @@ typedef enum {
     OP_I32_SHL     = 0x74,
     OP_I32_SHR_S   = 0x75,
     OP_I32_SHR_U   = 0x76,
+    OP_I32_ROTL    = 0x77,
+    OP_I32_ROTR    = 0x78,
+    OP_I64_CLZ     = 0x79,
+    OP_I64_CTZ     = 0x7A,
+    OP_I64_POPCNT  = 0x7B,
     OP_I64_ADD     = 0x7C,
     OP_I64_SUB     = 0x7D,
     OP_I64_MUL     = 0x7E,
@@ -362,6 +409,8 @@ typedef enum {
     OP_I64_SHL     = 0x86,
     OP_I64_SHR_S   = 0x87,
     OP_I64_SHR_U   = 0x88,
+    OP_I64_ROTL    = 0x89,
+    OP_I64_ROTR    = 0x8A,
     /* ---- Float arithmetic (exact MVP encodings) ---- */
     OP_F32_ABS     = 0x8B,
     OP_F32_NEG     = 0x8C,
@@ -391,12 +440,13 @@ typedef enum {
     OP_F64_MIN     = 0xA4,
     OP_F64_MAX     = 0xA5,
     OP_F64_COPYSIGN = 0xA6,
-    /* 0xA7 is unused in MVP. */
+    OP_I32_WRAP_I64 = 0xA7,
     OP_I32_TRUNC_F32_S = 0xA8,
     OP_I32_TRUNC_F32_U = 0xA9,
     OP_I32_TRUNC_F64_S = 0xAA,
     OP_I32_TRUNC_F64_U = 0xAB,
-    /* 0xAC/0xAD are saturating conversions (post-MVP, not implemented). */
+    OP_I64_EXTEND_I32_S = 0xAC,
+    OP_I64_EXTEND_I32_U = 0xAD,
     OP_I64_TRUNC_F32_S = 0xAE,
     OP_I64_TRUNC_F32_U = 0xAF,
     OP_I64_TRUNC_F64_S = 0xB0,

@@ -13,11 +13,13 @@
  * - Typing-rule violations use the WASM_ERR_INVALID_* family, which
  *   only the body-typing machine (and friends) can produce.
  *
- * Engine-convention notes: bodies without a trailing 0x0B are accepted
- * (implicit end, matching execution); a trailing 0x0B closing an empty
- * control stack is also accepted. Block results accept all four MVP
- * valtypes (arity still at most one). Locals carry declared types.
- * Opcodes the interpreter cannot execute are INVALID_SECTION.
+ * Engine-convention notes: function bodies MUST end with an explicit
+ * function-level 0x0B (MVP strictness; bodies that fall off the code
+ * window are TRUNCATED, as are bodies with unclosed blocks). A trailing
+ * 0x0B closing an empty control stack is the function end marker.
+ * Block results accept all four MVP valtypes (arity still at most one).
+ * Locals carry declared types. Opcodes the interpreter cannot execute
+ * (reserved/non-MVP bytes) are INVALID_SECTION.
  */
 
 #include "wasm_validate.h"
@@ -328,6 +330,9 @@ static wasm_err_t vopen_block(validator_t *v, uint8_t kind, uint8_t result,
                               uint32_t height)
 {
     vctrl_t *f;
+    /* Capture the enclosing unreachability BEFORE pushing: afterwards the
+     * top frame is the new one itself. */
+    int parent_dead = vunreach(v);
     if (v->cdepth >= (uint32_t)WASM_MAX_CONTROL_STACK_DEPTH) {
         return WASM_ERR_INVALID_BLOCK;
     }
@@ -335,7 +340,9 @@ static wasm_err_t vopen_block(validator_t *v, uint8_t kind, uint8_t result,
     f->kind = kind;
     f->result = result;
     f->height = height;
-    f->unreachable = 0;
+    /* A block opened in dead code starts dead: the polymorphic stack
+     * extends into nested frames (spec unreachable/merge behavior). */
+    f->unreachable = parent_dead;
     f->has_else = 0;
     return WASM_OK;
 }
@@ -384,6 +391,27 @@ static wasm_err_t vimm_u32(const uint8_t **pp, const uint8_t *end,
 {
     if (leb128_decode_u32(pp, end, out) != WASM_OK) {
         return WASM_ERR_TRUNCATED;
+    }
+    return WASM_OK;
+}
+
+/* Decode a load/store memarg (align + offset immediates) and check the
+ * alignment against the access size: 2^align must not exceed it. */
+static wasm_err_t vmemarg(const uint8_t **pp, const uint8_t *end,
+                          uint32_t access)
+{
+    uint32_t align = 0u, offset = 0u;
+    wasm_err_t rc = vimm_u32(pp, end, &align);
+    if (rc != WASM_OK) {
+        return rc;
+    }
+    rc = vimm_u32(pp, end, &offset);
+    if (rc != WASM_OK) {
+        return rc;
+    }
+    (void)offset; /* addressing is a runtime concern */
+    if (align > 31u || (1u << align) > access) {
+        return WASM_ERR_INVALID_ALIGN;
     }
     return WASM_OK;
 }
@@ -448,6 +476,8 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
         case 0x00u: /* unreachable: stack becomes polymorphic */
             vmark_unreachable(v);
             break;
+        case 0x01u: /* nop: no stack effect */
+            break;
         case 0x02u:
         case 0x03u:
         case 0x04u: {
@@ -492,7 +522,12 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
             }
             v->vtop = f->height;
             f->has_else = 1;
-            f->unreachable = 0;
+            /* The else branch is reachable iff the enclosing context is:
+             * a `br`-terminated then-branch does not kill it, but dead
+             * outer code keeps it dead. */
+            f->unreachable = (v->cdepth >= 2u)
+                                 ? v->cs[v->cdepth - 2u].unreachable
+                                 : v->func_unreachable;
             break;
         }
         case 0x0Bu: { /* end: close a block, or the function itself */
@@ -676,6 +711,18 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
             }
             break;
         }
+        case 0x1Au: {
+            /* MVP drop: discard one value. vpop_any fabricates Unknown
+             * when empty in unreachable (polymorphic) mode, so drop
+             * after unreachable is valid; reachable emptiness rejects. */
+            uint8_t dt = V_UNKNOWN;
+            rc = vpop_any(v, &dt);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            (void)dt;
+            break;
+        }
         case 0x1Bu: {
             /* MVP untyped select: cond i32 + two equal-typed operands. */
             uint8_t t1 = V_UNKNOWN, t2 = V_UNKNOWN;
@@ -796,6 +843,152 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
             }
             break;
         }
+        case 0x2Au:
+        case 0x2Bu:
+        case 0x38u:
+        case 0x39u: {
+            /* f32/f64 load/store: memarg align/offset, 4/8-byte access. */
+            uint32_t access = (op == 0x2Bu || op == 0x39u) ? 8u : 4u;
+            uint8_t vt = (op == 0x2Au || op == 0x38u)
+                             ? (uint8_t)WASM_TYPE_F32
+                             : (uint8_t)WASM_TYPE_F64;
+            rc = vmemarg(&p, body_end, access);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            if (op == 0x2Au || op == 0x2Bu) {
+                rc = vpop_expect(v, (uint8_t)WASM_TYPE_I32);
+                if (rc != WASM_OK) {
+                    return rc;
+                }
+                rc = vpush(v, vt);
+            } else {
+                rc = vpop_expect(v, vt);
+                if (rc != WASM_OK) {
+                    return rc;
+                }
+                rc = vpop_expect(v, (uint8_t)WASM_TYPE_I32);
+            }
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
+        }
+        case 0x29u:
+        case 0x2Cu:
+        case 0x2Du:
+        case 0x2Eu:
+        case 0x2Fu:
+        case 0x30u:
+        case 0x31u:
+        case 0x32u:
+        case 0x33u:
+        case 0x34u:
+        case 0x35u: {
+            /* i64 and sub-word loads: memarg align/offset, then
+             * [i32] -> [i64 or i32]. Access sizes: 8 / 1 / 2 / 4. */
+            uint32_t access;
+            uint8_t vt;
+            if (op == 0x29u) {
+                access = 8u;
+                vt = (uint8_t)WASM_TYPE_I64;
+            } else if (op == 0x2Cu || op == 0x2Du || op == 0x30u ||
+                       op == 0x31u) {
+                access = 1u;
+                vt = (op == 0x2Cu || op == 0x2Du)
+                         ? (uint8_t)WASM_TYPE_I32
+                         : (uint8_t)WASM_TYPE_I64;
+            } else if (op == 0x2Eu || op == 0x2Fu || op == 0x32u ||
+                       op == 0x33u) {
+                access = 2u;
+                vt = (op == 0x2Eu || op == 0x2Fu)
+                         ? (uint8_t)WASM_TYPE_I32
+                         : (uint8_t)WASM_TYPE_I64;
+            } else {
+                access = 4u;
+                vt = (uint8_t)WASM_TYPE_I64;
+            }
+            rc = vmemarg(&p, body_end, access);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpop_expect(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpush(v, vt);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
+        }
+        case 0x37u:
+        case 0x3Au:
+        case 0x3Bu:
+        case 0x3Cu:
+        case 0x3Du:
+        case 0x3Eu: {
+            /* i64 and sub-word stores: [i32 base, value] -> [].
+             * Value type is i64 except 0x3A/0x3B (i32). */
+            uint32_t access;
+            uint8_t vt;
+            if (op == 0x37u) {
+                access = 8u;
+                vt = (uint8_t)WASM_TYPE_I64;
+            } else if (op == 0x3Au) {
+                access = 1u;
+                vt = (uint8_t)WASM_TYPE_I32;
+            } else if (op == 0x3Bu) {
+                access = 2u;
+                vt = (uint8_t)WASM_TYPE_I32;
+            } else if (op == 0x3Cu) {
+                access = 1u;
+                vt = (uint8_t)WASM_TYPE_I64;
+            } else if (op == 0x3Du) {
+                access = 2u;
+                vt = (uint8_t)WASM_TYPE_I64;
+            } else {
+                access = 4u;
+                vt = (uint8_t)WASM_TYPE_I64;
+            }
+            rc = vmemarg(&p, body_end, access);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpop_expect(v, vt);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpop_expect(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
+        }
+        case 0x3Fu:
+        case 0x40u: {
+            /* memory.size / memory.grow: one reserved 0x00 byte.
+             * size is [] -> [i32]; grow is [i32] -> [i32]. */
+            uint8_t flag;
+            if (!vreadable(p, body_end, 1u)) {
+                return WASM_ERR_TRUNCATED;
+            }
+            flag = *p++;
+            if (flag != 0x00u) {
+                return WASM_ERR_INVALID_SECTION;
+            }
+            if (op == 0x40u) {
+                rc = vpop_expect(v, (uint8_t)WASM_TYPE_I32);
+                if (rc != WASM_OK) {
+                    return rc;
+                }
+            }
+            rc = vpush(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
+        }
         case 0x41u:
         case 0x42u:
         case 0x43u:
@@ -856,6 +1049,30 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
                 return rc;
             }
             break;
+        case 0x50u: /* i64.eqz: i64 -> i32 */
+            rc = vpop_expect(v, (uint8_t)WASM_TYPE_I64);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpush(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
+        case 0x51u: case 0x52u: case 0x53u: case 0x54u: case 0x55u:
+        case 0x56u: case 0x57u: case 0x58u: case 0x59u: case 0x5Au:
+            /* i64 comparisons: (i64,i64) -> i32 */
+            rc = vpop_operands(v, (const uint8_t[]){ (uint8_t)WASM_TYPE_I64,
+                                                     (uint8_t)WASM_TYPE_I64 },
+                               2u);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpush(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
         case 0x5Bu: case 0x5Cu: case 0x5Du: case 0x5Eu: case 0x5Fu:
         case 0x60u:
             /* f32 comparisons: (f32,f32) -> i32 */
@@ -884,10 +1101,21 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
                 return rc;
             }
             break;
+        case 0x67u: case 0x68u: case 0x69u:
+            /* i32 bit-count unaries: i32 -> i32 */
+            rc = vpop_expect(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpush(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
         case 0x6Au: case 0x6Bu: case 0x6Cu: case 0x6Du: case 0x6Eu:
         case 0x6Fu: case 0x70u: case 0x71u: case 0x72u: case 0x73u:
-        case 0x74u: case 0x75u: case 0x76u:
-            /* i32 ALU: (i32,i32) -> i32 */
+        case 0x74u: case 0x75u: case 0x76u: case 0x77u: case 0x78u:
+            /* i32 ALU (incl. rotates): (i32,i32) -> i32 */
             rc = vpop_operands(v, (const uint8_t[]){ (uint8_t)WASM_TYPE_I32,
                                                      (uint8_t)WASM_TYPE_I32 },
                                2u);
@@ -899,10 +1127,21 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
                 return rc;
             }
             break;
+        case 0x79u: case 0x7Au: case 0x7Bu:
+            /* i64 bit-count unaries: i64 -> i64 */
+            rc = vpop_expect(v, (uint8_t)WASM_TYPE_I64);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpush(v, (uint8_t)WASM_TYPE_I64);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
         case 0x7Cu: case 0x7Du: case 0x7Eu: case 0x7Fu: case 0x80u:
         case 0x81u: case 0x82u: case 0x83u: case 0x84u: case 0x85u:
-        case 0x86u: case 0x87u: case 0x88u:
-            /* i64 ALU: (i64,i64) -> i64 */
+        case 0x86u: case 0x87u: case 0x88u: case 0x89u: case 0x8Au:
+            /* i64 ALU (incl. rotates): (i64,i64) -> i64 */
             rc = vpop_operands(v, (const uint8_t[]){ (uint8_t)WASM_TYPE_I64,
                                                      (uint8_t)WASM_TYPE_I64 },
                                2u);
@@ -966,6 +1205,17 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
                 return rc;
             }
             break;
+        case 0xA7u:
+            /* i32.wrap_i64: i64 -> i32 */
+            rc = vpop_expect(v, (uint8_t)WASM_TYPE_I64);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpush(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
         case 0xA8u:
             /* i32.trunc_f32_s: f32 -> i32 */
             rc = vpop_expect(v, (uint8_t)WASM_TYPE_F32);
@@ -1006,6 +1256,18 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
                 return rc;
             }
             rc = vpush(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
+        case 0xACu:
+        case 0xADu:
+            /* i64.extend_i32_s/u: i32 -> i64 */
+            rc = vpop_expect(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpush(v, (uint8_t)WASM_TYPE_I64);
             if (rc != WASM_OK) {
                 return rc;
             }
@@ -1169,29 +1431,20 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
             }
             break;
         default:
-            /* Bytes the interpreter cannot execute (nop, drop, i64
-             * comparisons, sub-word/float memory ops, saturating
-             * conversions, ...) are undecodable into engine semantics. */
+            /* Bytes the interpreter cannot execute are undecodable into
+             * engine semantics. (All MVP opcodes are implemented; this
+             * fires only for reserved/non-MVP bytes.) */
             return WASM_ERR_INVALID_SECTION;
         }
     }
+    /* Strict function end (MVP): reaching the end of the code window
+     * without an explicit function-level 0x0B is malformed. The only way
+     * past the loop with acceptance is the `goto func_end` above, which
+     * runs solely at zero control depth. */
+    return WASM_ERR_TRUNCATED;
 func_end:
-    /* Implicit ends for still-open blocks (engine convention), then the
-     * function-result check. */
-    while (v->cdepth > 0u) {
-        vctrl_t f = v->cs[--v->cdepth];
-        rc = vclose_check(v, &f);
-        if (rc != WASM_OK) {
-            return rc;
-        }
-        v->vtop = f.height;
-        if (f.result != V_BLOCK_VOID) {
-            rc = vpush(v, f.result);
-            if (rc != WASM_OK) {
-                return rc;
-            }
-        }
-    }
+    /* All blocks are closed here (cdepth is 0 on arrival); check the
+     * function result against the final value stack. */
     if (v->result == V_BLOCK_VOID) {
         if (v->vtop != 0u && !v->func_unreachable) {
             return WASM_ERR_INVALID_TYPE;
@@ -1212,6 +1465,33 @@ func_end:
 }
 
 /* ---- module-level validation ---- */
+
+/* Count sections carrying the given id (MVP allows at most one of each;
+ * this validator enforces it for the table/memory sections it reasons
+ * about; other ids stay first-match, as before). */
+static wasm_err_t vcount_sections(const wasm_module_t *mod, uint8_t id,
+                                  uint32_t *out)
+{
+    const uint8_t *cursor;
+    uint32_t n = 0u;
+    wasm_err_t rc;
+    if (mod == NULL || out == NULL) {
+        return WASM_ERR_NULL;
+    }
+    cursor = mod->sections_begin;
+    while (cursor < mod->sections_end) {
+        wasm_section_header_t sec;
+        rc = wasm_get_section(&cursor, mod->sections_end, &sec);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        if (sec.id == id) {
+            n++;
+        }
+    }
+    *out = n;
+    return WASM_OK;
+}
 
 /* Optional section fetch: absent -> empty slice. */
 static wasm_err_t vopt_section(const wasm_module_t *mod, uint8_t id,
@@ -1296,6 +1576,26 @@ wasm_err_t wasm_validate_module(const wasm_module_t *mod)
     rc = vopt_section(mod, WASM_SECT_EXPORT, &expp, &has_exp);
     if (rc != WASM_OK) {
         return rc;
+    }
+
+    /* At most one table section and at most one memory section (MVP):
+     * duplicates would otherwise be silently shadowed by first-match. */
+    {
+        uint32_t nsec = 0u;
+        rc = vcount_sections(mod, (uint8_t)WASM_SECT_TABLE, &nsec);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        if (nsec > 1u) {
+            return WASM_ERR_INVALID_SECTION;
+        }
+        rc = vcount_sections(mod, (uint8_t)WASM_SECT_MEMORY, &nsec);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        if (nsec > 1u) {
+            return WASM_ERR_INVALID_SECTION;
+        }
     }
 
     /* Types: full single-pass validation. */
@@ -1399,27 +1699,10 @@ wasm_err_t wasm_validate_module(const wasm_module_t *mod)
             } else if (kind == 0x01u) {
                 return WASM_ERR_IMPORTED_TABLES_UNSUPPORTED;
             } else if (kind == 0x02u) {
-                uint32_t flags, min, maxv = 0u;
-                rc = leb128_decode_u32(&cur, end, &flags);
-                if (rc != WASM_OK) {
-                    return rc;
-                }
-                if (flags > 1u) {
-                    return WASM_ERR_INVALID_SECTION;
-                }
-                rc = leb128_decode_u32(&cur, end, &min);
-                if (rc != WASM_OK) {
-                    return rc;
-                }
-                if (flags & 1u) {
-                    rc = leb128_decode_u32(&cur, end, &maxv);
-                    if (rc != WASM_OK) {
-                        return rc;
-                    }
-                    if (maxv < min) {
-                        return WASM_ERR_INVALID_SECTION;
-                    }
-                }
+                /* memories: the host has no memory object to bind
+                 * (deliberate MVP cut, like tables): reject here so a
+                 * --no-validate link can never silently drop the import. */
+                return WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED;
             } else if (kind == 0x03u) {
                 uint8_t vt, mut;
                 if (!vreadable(cur, end, 2u)) {
@@ -1679,13 +1962,24 @@ wasm_err_t wasm_validate_module(const wasm_module_t *mod)
             return WASM_ERR_SECTION_OVERFLOW;
         }
         for (i = 0u; i < count; i++) {
-            uint32_t memidx = 0u, len = 0u;
+            uint32_t flags = 0u, memidx = 0u, len = 0u;
             uint8_t it;
-            rc = leb128_decode_u32(&cur, end, &memidx);
+            /* Segment flags: 0 = active on memory 0 (offset + bytes, no
+             * memidx); 2 = active with explicit memidx (must be 0).
+             * Passive (1) needs bulk-memory: reject. */
+            rc = leb128_decode_u32(&cur, end, &flags);
             if (rc != WASM_OK) {
                 return rc;
             }
-            if (memidx != 0u) {
+            if (flags == 2u) {
+                rc = leb128_decode_u32(&cur, end, &memidx);
+                if (rc != WASM_OK) {
+                    return rc;
+                }
+                if (memidx != 0u) {
+                    return WASM_ERR_INVALID_SECTION;
+                }
+            } else if (flags != 0u) {
                 return WASM_ERR_INVALID_SECTION;
             }
             rc = veval_init(&cur, end, &mc, mc.nimportglobals, &it);
@@ -1720,13 +2014,29 @@ wasm_err_t wasm_validate_module(const wasm_module_t *mod)
             return rc;
         }
         for (i = 0u; i < count; i++) {
-            uint32_t tableidx = 0u, len = 0u, k;
+            uint32_t flags = 0u, tableidx = 0u, len = 0u, k;
             uint8_t it;
-            rc = leb128_decode_u32(&cur, end, &tableidx);
+            int is_ref = 0;
+            /* Segment flags: 0 = active on table 0 (tableidx, offset,
+             * funcref vec); 2 = active with explicit tableidx (must be 0)
+             * and elemkind (must be 0x00 funcref); 4 = active on table 0
+             * with `ref.func` init-expr elements. Passive/declared/GC
+             * reftypes (1, 3, 5+) need post-MVP features: reject. */
+            rc = leb128_decode_u32(&cur, end, &flags);
             if (rc != WASM_OK) {
                 return rc;
             }
-            if (tableidx != 0u) {
+            if (flags == 0u || flags == 2u) {
+                rc = leb128_decode_u32(&cur, end, &tableidx);
+                if (rc != WASM_OK) {
+                    return rc;
+                }
+                if (tableidx != 0u) {
+                    return WASM_ERR_INVALID_SECTION;
+                }
+            } else if (flags == 4u) {
+                is_ref = 1;
+            } else {
                 return WASM_ERR_INVALID_SECTION;
             }
             rc = veval_init(&cur, end, &mc, mc.nimportglobals, &it);
@@ -1736,15 +2046,44 @@ wasm_err_t wasm_validate_module(const wasm_module_t *mod)
             if (it != (uint8_t)WASM_TYPE_I32) {
                 return WASM_ERR_INVALID_SECTION;
             }
+            if (flags == 2u) {
+                uint8_t elemkind;
+                if (!vreadable(cur, end, 1u)) {
+                    return WASM_ERR_TRUNCATED;
+                }
+                elemkind = *cur++;
+                if (elemkind != 0x00u) {
+                    return WASM_ERR_INVALID_SECTION;
+                }
+            }
             rc = leb128_decode_u32(&cur, end, &len);
             if (rc != WASM_OK) {
                 return rc;
             }
             for (k = 0u; k < len; k++) {
                 uint32_t fidx = 0u;
-                rc = leb128_decode_u32(&cur, end, &fidx);
-                if (rc != WASM_OK) {
-                    return rc;
+                if (is_ref) {
+                    uint8_t marker;
+                    if (!vreadable(cur, end, 1u)) {
+                        return WASM_ERR_TRUNCATED;
+                    }
+                    marker = *cur++;
+                    if (marker != 0xD2u) {
+                        return WASM_ERR_INVALID_SECTION;
+                    }
+                    rc = leb128_decode_u32(&cur, end, &fidx);
+                    if (rc != WASM_OK) {
+                        return rc;
+                    }
+                    if (!vreadable(cur, end, 1u) || *cur != 0x0Bu) {
+                        return WASM_ERR_INVALID_SECTION;
+                    }
+                    cur++;
+                } else {
+                    rc = leb128_decode_u32(&cur, end, &fidx);
+                    if (rc != WASM_OK) {
+                        return rc;
+                    }
                 }
                 if (fidx >= nfuncs) {
                     return WASM_ERR_INVALID_SECTION;
