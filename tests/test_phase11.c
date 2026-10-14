@@ -192,6 +192,12 @@ static void test_corpus(void)
         static const uint8_t sel_mismatch[] = {
             0x41u, 0x01u, 0x42u, 0x01u, 0x41u, 0x01u, 0x1Bu, 0x0Bu
         };
+        static const uint8_t sel_dead[] = {
+            0x00u, 0x1Bu, 0x0Bu
+        };
+        static const uint8_t sel_dead_cond[] = {
+            0x00u, 0x41u, 0x01u, 0x1Bu, 0x0Bu
+        };
         check_result_body(0x7Fu, sel_i32, sizeof(sel_i32), WASM_OK,
                           "select i32 accepted");
         check_result_body(0x7Eu, sel_i64, sizeof(sel_i64), WASM_OK,
@@ -208,6 +214,10 @@ static void test_corpus(void)
                    "select cond i64 in void func");
         check_body(sel_mismatch, sizeof(sel_mismatch), WASM_ERR_INVALID_TYPE,
                    "select mismatch in void func");
+        check_body(sel_dead, sizeof(sel_dead), WASM_OK,
+                   "select on empty stack valid after unreachable");
+        check_body(sel_dead_cond, sizeof(sel_dead_cond), WASM_OK,
+                   "select with pushed cond valid after unreachable");
     }
     CHECK(validate_bytes(global_set_immutable, sizeof(global_set_immutable)) ==
           WASM_ERR_INVALID_GLOBAL, "immutable global.set");
