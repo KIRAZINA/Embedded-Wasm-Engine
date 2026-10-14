@@ -289,6 +289,7 @@ typedef wasm_trap_t (*wasm_host_func_t)(struct wasm_vm *vm,
  * Hex values are the exact WebAssembly MVP encodings (section 5.4). */
 typedef enum {
     OP_UNREACHABLE = 0x00,
+    OP_NOP         = 0x01,
     OP_BLOCK       = 0x02,
     OP_LOOP        = 0x03,
     OP_IF          = 0x04,
@@ -300,7 +301,8 @@ typedef enum {
     OP_RETURN      = 0x0F,
     OP_CALL        = 0x10,
     OP_CALL_INDIRECT = 0x11,
-    /* 0x1A (drop) is MVP but not implemented; 0x1B select is. */
+    /* 0x1A drop and 0x1B select: parametric instructions. */
+    OP_DROP        = 0x1A,
     OP_SELECT      = 0x1B,
     OP_LOCAL_GET   = 0x20,
     OP_LOCAL_SET   = 0x21,

@@ -448,6 +448,8 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
         case 0x00u: /* unreachable: stack becomes polymorphic */
             vmark_unreachable(v);
             break;
+        case 0x01u: /* nop: no stack effect */
+            break;
         case 0x02u:
         case 0x03u:
         case 0x04u: {
@@ -674,6 +676,18 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
                     return rc;
                 }
             }
+            break;
+        }
+        case 0x1Au: {
+            /* MVP drop: discard one value. vpop_any fabricates Unknown
+             * when empty in unreachable (polymorphic) mode, so drop
+             * after unreachable is valid; reachable emptiness rejects. */
+            uint8_t dt = V_UNKNOWN;
+            rc = vpop_any(v, &dt);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            (void)dt;
             break;
         }
         case 0x1Bu: {
