@@ -9,6 +9,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "wasm_vm.h"
 
@@ -24,6 +25,9 @@ static int g_fail = 0;
 static wasm_vm_t g_vm;
 static uint8_t g_arena[65536];
 static wasm_memory_t g_mem;
+/* Two-page arena for grow-then-access tests (never malloc'd). */
+static uint8_t g_arena2[131072];
+static wasm_memory_t g_mem2;
 
 /* ---- test-side bytecode assemblers (SLEB/ULEB encoders) ---- */
 
@@ -56,6 +60,26 @@ static size_t enc_s32(uint8_t *out, int32_t v)
         out[n++] = b;
     }
     return n;
+}
+
+/* Raw 4-byte LE float payload (f32.const immediate / expected bits). */
+static size_t enc_f32(uint8_t *out, uint32_t bits)
+{
+    out[0] = (uint8_t)(bits & 0xFFu);
+    out[1] = (uint8_t)((bits >> 8u) & 0xFFu);
+    out[2] = (uint8_t)((bits >> 16u) & 0xFFu);
+    out[3] = (uint8_t)((bits >> 24u) & 0xFFu);
+    return 4u;
+}
+
+/* Raw 8-byte LE double payload (f64.const immediate / expected bits). */
+static size_t enc_f64(uint8_t *out, uint64_t bits)
+{
+    unsigned k;
+    for (k = 0u; k < 8u; k++) {
+        out[k] = (uint8_t)((bits >> (8u * k)) & 0xFFu);
+    }
+    return 8u;
 }
 
 /* Fresh VM + bound memory, enter (0 params, nlocals, nret), attach, run. */
@@ -98,6 +122,34 @@ static void expect_i64(int64_t want, const char *name)
     wasm_val_t v;
     wasm_trap_t tr = wasm_stack_pop_typed(&g_vm.operands, WASM_TYPE_I64, &v);
     CHECK(tr == WASM_TRAP_OK && v.value.i64 == want, name);
+}
+
+static uint32_t f32bits(float v)
+{
+    uint32_t u = 0u;
+    memcpy(&u, &v, sizeof(u));
+    return u;
+}
+
+static uint64_t f64bits(double v)
+{
+    uint64_t u = 0u;
+    memcpy(&u, &v, sizeof(u));
+    return u;
+}
+
+static void expect_f32_bits(uint32_t want, const char *name)
+{
+    wasm_val_t v;
+    wasm_trap_t tr = wasm_stack_pop_typed(&g_vm.operands, WASM_TYPE_F32, &v);
+    CHECK(tr == WASM_TRAP_OK && f32bits(v.value.f32) == want, name);
+}
+
+static void expect_f64_bits(uint64_t want, const char *name)
+{
+    wasm_val_t v;
+    wasm_trap_t tr = wasm_stack_pop_typed(&g_vm.operands, WASM_TYPE_F64, &v);
+    CHECK(tr == WASM_TRAP_OK && f64bits(v.value.f64) == want, name);
 }
 
 /* Build [const a, const b, op], run, expect one i32 result. */
@@ -299,6 +351,133 @@ static void test_mem_ops(void)
 
 /* ---------- consts, locals-via-step, misc traps ---------- */
 
+static void test_mem_float(void)
+{
+    printf("[T] F32/F64 LOAD/STORE round-trip, unaligned, OOB, after grow\n");
+    { /* f32 aligned round-trip @100; LE bytes land in the arena. */
+        uint8_t code[48];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 100);
+        code[n++] = (uint8_t)OP_F32_CONST; n += enc_f32(code + n, 0x40490FDBu);
+        code[n++] = (uint8_t)OP_F32_STORE; code[n++] = 0x02; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 100);
+        code[n++] = (uint8_t)OP_F32_LOAD; code[n++] = 0x02; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run f32 store/load @100");
+        expect_f32_bits(0x40490FDBu, "f32 pi round-trips bit-exact");
+        CHECK(g_arena[100] == 0xDBu && g_arena[101] == 0x0Fu &&
+              g_arena[102] == 0x49u && g_arena[103] == 0x40u, "LE bytes DB 0F 49 40 in arena");
+    }
+    { /* f64 aligned round-trip @200. */
+        uint8_t code[64];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 200);
+        code[n++] = (uint8_t)OP_F64_CONST; n += enc_f64(code + n, 0x400921FB54442D18uLL);
+        code[n++] = (uint8_t)OP_F64_STORE; code[n++] = 0x03; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 200);
+        code[n++] = (uint8_t)OP_F64_LOAD; code[n++] = 0x03; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run f64 store/load @200");
+        expect_f64_bits(0x400921FB54442D18uLL, "f64 pi round-trips bit-exact");
+    }
+    { /* f32 unaligned @3 with a nonzero align hint (hint is ignored). */
+        uint8_t code[48];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 3);
+        code[n++] = (uint8_t)OP_F32_CONST; n += enc_f32(code + n, 0x3FC00000u);
+        code[n++] = (uint8_t)OP_F32_STORE; code[n++] = 0x02; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 3);
+        code[n++] = (uint8_t)OP_F32_LOAD; code[n++] = 0x00; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run f32 unaligned @3");
+        expect_f32_bits(0x3FC00000u, "unaligned f32 1.5 round-trips");
+    }
+    { /* f64 unaligned @5. */
+        uint8_t code[64];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 5);
+        code[n++] = (uint8_t)OP_F64_CONST; n += enc_f64(code + n, 0xC000000000000000uLL);
+        code[n++] = (uint8_t)OP_F64_STORE; code[n++] = 0x00; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 5);
+        code[n++] = (uint8_t)OP_F64_LOAD; code[n++] = 0x00; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run f64 unaligned @5");
+        expect_f64_bits(0xC000000000000000uLL, "unaligned f64 -2.0 round-trips");
+    }
+    { /* boundary OOB: 2 bytes left for a 4-byte f32 load. */
+        uint8_t code[16];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 65534);
+        code[n++] = (uint8_t)OP_F32_LOAD; code[n++] = 0x02; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_MEMORY_OUT_OF_BOUNDS, "f32 load @cap-2 -> OOB");
+    }
+    { /* boundary OOB: f64 store @cap-5 overruns by 3 bytes. */
+        uint8_t code[32];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 65531);
+        code[n++] = (uint8_t)OP_F64_CONST; n += enc_f64(code + n, 0uLL);
+        code[n++] = (uint8_t)OP_F64_STORE; code[n++] = 0x03; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_MEMORY_OUT_OF_BOUNDS, "f64 store @cap-5 -> OOB");
+    }
+    { /* grown memory becomes addressable to float ops. */
+        uint8_t code[48];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 70000);
+        code[n++] = (uint8_t)OP_F32_CONST; n += enc_f32(code + n, 0x41200000u);
+        code[n++] = (uint8_t)OP_F32_STORE; code[n++] = 0x02; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 70000);
+        code[n++] = (uint8_t)OP_F32_LOAD; code[n++] = 0x02; code[n++] = 0x00;
+        CHECK(wasm_vm_init(&g_vm) == WASM_TRAP_OK, "init grow arena vm");
+        CHECK(wasm_memory_init(&g_mem2, g_arena2, (uint32_t)sizeof(g_arena2), 1u, 2u) == WASM_TRAP_OK, "1-page mem, max 2");
+        CHECK(wasm_vm_bind_memory(&g_vm, &g_mem2) == WASM_TRAP_OK, "bind grow arena");
+        CHECK(wasm_vm_enter_function(&g_vm, 0u, 0u, 0u, 0u) == WASM_TRAP_OK, "enter");
+        CHECK(wasm_vm_attach_code(&g_vm, code, n) == WASM_TRAP_OK, "attach");
+        CHECK(wasm_vm_run(&g_vm) == WASM_TRAP_MEMORY_OUT_OF_BOUNDS, "store @70000 before grow -> OOB");
+        CHECK(wasm_mem_grow(&g_mem2, 1u, NULL) == WASM_TRAP_OK, "grow to 2 pages");
+        CHECK(wasm_vm_init(&g_vm) == WASM_TRAP_OK, "re-init after grow");
+        CHECK(wasm_vm_bind_memory(&g_vm, &g_mem2) == WASM_TRAP_OK, "re-bind grown mem");
+        CHECK(wasm_vm_enter_function(&g_vm, 0u, 0u, 0u, 0u) == WASM_TRAP_OK, "re-enter");
+        CHECK(wasm_vm_attach_code(&g_vm, code, n) == WASM_TRAP_OK, "re-attach");
+        CHECK(wasm_vm_run(&g_vm) == WASM_TRAP_OK, "store/load @70000 after grow");
+        expect_f32_bits(0x41200000u, "grown-page f32 10.0 round-trips");
+    }
+    { /* NaN payloads survive a store/load round-trip bit-exact. */
+        uint8_t code[48];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 400);
+        code[n++] = (uint8_t)OP_F32_CONST; n += enc_f32(code + n, 0x7FC00001u);
+        code[n++] = (uint8_t)OP_F32_STORE; code[n++] = 0x02; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 400);
+        code[n++] = (uint8_t)OP_F32_LOAD; code[n++] = 0x02; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run NaN round-trip");
+        expect_f32_bits(0x7FC00001u, "NaN payload bit-exact through memory");
+    }
+    { /* store with an i32 (not f32) value traps on the type. */
+        uint8_t code[32];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 8);
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 1);
+        code[n++] = (uint8_t)OP_F32_STORE; code[n++] = 0x02; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_TYPE_MISMATCH, "f32.store i32 value -> TYPE_MISMATCH");
+    }
+    { /* f64 load with an i64 (not i32) base traps on the type. */
+        uint8_t code[32];
+        size_t n = 0u;
+        code[n++] = 0x42u; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_F64_LOAD; code[n++] = 0x03; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_TYPE_MISMATCH, "f64.load i64 base -> TYPE_MISMATCH");
+    }
+    { /* unbound memory traps instead of crashing. */
+        uint8_t code[16];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 0);
+        code[n++] = (uint8_t)OP_F64_LOAD; code[n++] = 0x03; code[n++] = 0x00;
+        CHECK(wasm_vm_init(&g_vm) == WASM_TRAP_OK, "init (no memory bound)");
+        CHECK(wasm_vm_enter_function(&g_vm, 0u, 0u, 0u, 0u) == WASM_TRAP_OK, "enter");
+        CHECK(wasm_vm_attach_code(&g_vm, code, n) == WASM_TRAP_OK, "attach");
+        CHECK(wasm_vm_run(&g_vm) == WASM_TRAP_MEMORY_OUT_OF_BOUNDS, "f64 load unbound -> OOB");
+    }
+    CHECK((uint8_t)OP_F32_LOAD == 0x2Au && (uint8_t)OP_F64_LOAD == 0x2Bu &&
+          (uint8_t)OP_F32_STORE == 0x38u && (uint8_t)OP_F64_STORE == 0x39u,
+          "float mem opcode encodings");
+}
+
 static void test_consts_locals_traps(void)
 {
     printf("[T] I64 const, locals via step, unknown/unreachable/overrun traps\n");
@@ -382,6 +561,7 @@ int main(void)
     test_bits_shifts();
     test_compare();
     test_mem_ops();
+    test_mem_float();
     test_consts_locals_traps();
     test_footprint();
     printf("--------------------------------------------\n");

@@ -126,6 +126,48 @@ static void test_corpus(void)
                WASM_OK, "drop after unreachable valid (dead code)");
     check_body(nop_in_block, sizeof(nop_in_block), WASM_OK,
                "nop inside block accepted");
+    {
+        static const uint8_t f32_load[] = {
+            0x41u, 0x00u, 0x2Au, 0x02u, 0x00u, 0x0Bu
+        };
+        static const uint8_t f64_load[] = {
+            0x41u, 0x00u, 0x2Bu, 0x03u, 0x00u, 0x0Bu
+        };
+        static const uint8_t f32_store[] = {
+            0x41u, 0x00u, 0x43u, 0x00u, 0x00u, 0x80u, 0x3Fu,
+            0x38u, 0x02u, 0x00u, 0x0Bu
+        };
+        static const uint8_t f64_store[] = {
+            0x41u, 0x00u, 0x44u, 0x00u, 0x00u, 0x00u, 0x00u,
+            0x00u, 0x00u, 0x00u, 0x00u, 0x39u, 0x03u, 0x00u, 0x0Bu
+        };
+        static const uint8_t f32_bad_align[] = {
+            0x41u, 0x00u, 0x2Au, 0x03u, 0x00u, 0x0Bu
+        };
+        static const uint8_t f64_bad_align[] = {
+            0x41u, 0x00u, 0x2Bu, 0x04u, 0x00u, 0x0Bu
+        };
+        static const uint8_t f32_bad_base[] = {
+            0x42u, 0x00u, 0x2Au, 0x02u, 0x00u, 0x0Bu
+        };
+        static const uint8_t f32_bad_value[] = {
+            0x41u, 0x00u, 0x41u, 0x01u, 0x38u, 0x02u, 0x00u, 0x0Bu
+        };
+        check_result_body(0x7Du, f32_load, sizeof(f32_load), WASM_OK,
+                          "f32.load ()->[f32] accepted");
+        check_result_body(0x7Cu, f64_load, sizeof(f64_load), WASM_OK,
+                          "f64.load ()->[f64] accepted");
+        check_body(f32_store, sizeof(f32_store), WASM_OK, "f32.store accepted");
+        check_body(f64_store, sizeof(f64_store), WASM_OK, "f64.store accepted");
+        check_body(f32_bad_align, sizeof(f32_bad_align),
+                   WASM_ERR_INVALID_ALIGN, "f32.load align 3 rejected");
+        check_body(f64_bad_align, sizeof(f64_bad_align),
+                   WASM_ERR_INVALID_ALIGN, "f64.load align 4 rejected");
+        check_body(f32_bad_base, sizeof(f32_bad_base),
+                   WASM_ERR_INVALID_TYPE, "f32.load i64 base rejected");
+        check_body(f32_bad_value, sizeof(f32_bad_value),
+                   WASM_ERR_INVALID_TYPE, "f32.store i32 value rejected");
+    }
 
     {
         static const uint8_t sel_i32[] = {

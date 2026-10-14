@@ -22,11 +22,11 @@ The VM `wasm_vm_step` switch `default:` returns
 
 | verdict | count |
 |---|---:|
-| OK | 110 |
+| OK | 114 |
 | UNTESTED | 15 |
 | MISSING_IN_VALIDATOR | 0 |
 | MISSING_IN_VM | 0 |
-| NOT_IN_ENUM | 47 |
+| NOT_IN_ENUM | 43 |
 
 ## Matrix
 
@@ -54,8 +54,8 @@ The VM `wasm_vm_step` switch `default:` returns
 | 24 | global.set | yes | yes | yes | yes | OK |
 | 28 | i32.load | yes | yes | yes | yes | OK |
 | 29 | i64.load | no | no | no | no | NOT_IN_ENUM |
-| 2a | f32.load | no | no | no | no | NOT_IN_ENUM |
-| 2b | f64.load | no | no | no | no | NOT_IN_ENUM |
+| 2a | f32.load | yes | yes | yes | yes | OK |
+| 2b | f64.load | yes | yes | yes | yes | OK |
 | 2c | i32.load8_s | no | no | no | no | NOT_IN_ENUM |
 | 2d | i32.load8_u | no | no | no | no | NOT_IN_ENUM |
 | 2e | i32.load16_s | no | no | no | no | NOT_IN_ENUM |
@@ -68,8 +68,8 @@ The VM `wasm_vm_step` switch `default:` returns
 | 35 | i64.load32_u | no | no | no | no | NOT_IN_ENUM |
 | 36 | i32.store | yes | yes | yes | yes | OK |
 | 37 | i64.store | no | no | no | no | NOT_IN_ENUM |
-| 38 | f32.store | no | no | no | no | NOT_IN_ENUM |
-| 39 | f64.store | no | no | no | no | NOT_IN_ENUM |
+| 38 | f32.store | yes | yes | yes | yes | OK |
+| 39 | f64.store | yes | yes | yes | yes | OK |
 | 3a | i32.store8 | no | no | no | no | NOT_IN_ENUM |
 | 3b | i32.store16 | no | no | no | no | NOT_IN_ENUM |
 | 3c | i64.store8 | no | no | no | no | NOT_IN_ENUM |
