@@ -20,6 +20,11 @@ MKDIR_P   = mkdir -p $(BUILD)
 ARM_MKDIR = mkdir -p $(ARM_BUILD)
 endif
 RUNNER    = $(BUILD)/wasm_runner
+ifeq ($(OS),Windows_NT)
+PARITY_RUNNER = $(RUNNER).exe
+else
+PARITY_RUNNER = $(RUNNER)
+endif
 T1        = $(BUILD)/test_phase1
 T2        = $(BUILD)/test_phase2
 T3        = $(BUILD)/test_phase3
@@ -165,6 +170,9 @@ testcli: $(TCLI)
 fuzz: $(FUZZ)
 	./$(FUZZ) $(SEED) $(ITER)
 
+parity: $(RUNNER)
+	$(PYTHON) tools/parity_check.py --runner $(PARITY_RUNNER)
+
 size-report: tools/size_report.c
 	$(MKDIR_P)
 	$(CC) $(CFLAGS) tools/size_report.c -o $(BUILD)/size_report $(LDLIBS)
@@ -194,4 +202,4 @@ runner: $(RUNNER)
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 testcli runner fuzz size-report arm-cross sanitize clean
+.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 testcli runner fuzz parity size-report arm-cross sanitize clean
