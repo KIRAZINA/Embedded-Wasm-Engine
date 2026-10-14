@@ -828,7 +828,9 @@ static wasm_trap_t vm_scan_block(const uint8_t *from, const uint8_t *end,
             }
             break;
         case OP_UNREACHABLE:
+        case OP_NOP:
         case OP_RETURN:
+        case OP_DROP:
         case OP_SELECT:
         case OP_I32_EQZ:
         case OP_I32_EQ:
@@ -1325,6 +1327,16 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
         }
         f->code_ptr = p;
         return vm_do_branch(vm, f, sel);
+    }
+
+    case OP_NOP:
+        return WASM_TRAP_OK;
+
+    case OP_DROP: {
+        /* MVP parametric drop: pop and discard one value. Empty stack
+         * traps; the pop itself reports the reason (underflow). */
+        wasm_val_t tmp;
+        return wasm_stack_pop(&vm->operands, &tmp);
     }
 
     case OP_SELECT: {

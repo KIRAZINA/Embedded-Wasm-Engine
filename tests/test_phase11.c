@@ -97,8 +97,13 @@ static void test_corpus(void)
     };
     static const uint8_t select_underflow[] = { 0x1Bu, 0x0Bu };
     static const uint8_t br_if_bad_cond[] = { 0x02u, 0x40u, 0x0Du, 0x00u, 0x0Bu };
-    static const uint8_t nop_rejected[] = { 0x01u, 0x0Bu };
-    static const uint8_t drop_rejected[] = { 0x41u, 0x00u, 0x1Au, 0x0Bu };
+    static const uint8_t nop_ok[] = { 0x01u, 0x0Bu };
+    static const uint8_t drop_ok[] = { 0x41u, 0x00u, 0x1Au, 0x0Bu };
+    static const uint8_t drop_empty[] = { 0x1Au, 0x0Bu };
+    static const uint8_t drop_after_unreachable[] = { 0x00u, 0x1Au, 0x0Bu };
+    static const uint8_t nop_in_block[] = {
+        0x02u, 0x40u, 0x01u, 0x01u, 0x0Bu, 0x0Bu
+    };
     unsigned i;
 
     check_body(valid, sizeof(valid), WASM_OK, "valid body accepted");
@@ -113,8 +118,14 @@ static void test_corpus(void)
     check_body(else_bad, sizeof(else_bad), WASM_ERR_INVALID_TYPE, "else result agreement");
     check_body(select_underflow, sizeof(select_underflow), WASM_ERR_INVALID_TYPE, "select operands");
     check_body(br_if_bad_cond, sizeof(br_if_bad_cond), WASM_ERR_INVALID_TYPE, "br_if condition");
-    check_body(nop_rejected, sizeof(nop_rejected), WASM_ERR_INVALID_SECTION, "mvp nop rejected");
-    check_body(drop_rejected, sizeof(drop_rejected), WASM_ERR_INVALID_SECTION, "mvp drop rejected");
+    check_body(nop_ok, sizeof(nop_ok), WASM_OK, "mvp nop accepted");
+    check_body(drop_ok, sizeof(drop_ok), WASM_OK, "mvp drop accepted");
+    check_body(drop_empty, sizeof(drop_empty), WASM_ERR_INVALID_TYPE,
+               "drop on empty stack rejected");
+    check_body(drop_after_unreachable, sizeof(drop_after_unreachable),
+               WASM_OK, "drop after unreachable valid (dead code)");
+    check_body(nop_in_block, sizeof(nop_in_block), WASM_OK,
+               "nop inside block accepted");
 
     {
         static const uint8_t sel_i32[] = {

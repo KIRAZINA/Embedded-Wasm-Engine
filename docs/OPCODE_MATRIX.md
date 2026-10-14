@@ -22,18 +22,18 @@ The VM `wasm_vm_step` switch `default:` returns
 
 | verdict | count |
 |---|---:|
-| OK | 108 |
+| OK | 110 |
 | UNTESTED | 15 |
 | MISSING_IN_VALIDATOR | 0 |
 | MISSING_IN_VM | 0 |
-| NOT_IN_ENUM | 49 |
+| NOT_IN_ENUM | 47 |
 
 ## Matrix
 
 | hex | name | in enum | in VM switch | in validator | tested | verdict |
 |---|---|---|---|---|---|---|
 | 00 | unreachable | yes | yes | yes | yes | OK |
-| 01 | nop | no | no | no | yes | NOT_IN_ENUM |
+| 01 | nop | yes | yes | yes | yes | OK |
 | 02 | block | yes | yes | yes | yes | OK |
 | 03 | loop | yes | yes | yes | yes | OK |
 | 04 | if | yes | yes | yes | yes | OK |
@@ -45,7 +45,7 @@ The VM `wasm_vm_step` switch `default:` returns
 | 0f | return | yes | yes | yes | yes | OK |
 | 10 | call | yes | yes | yes | yes | OK |
 | 11 | call_indirect | yes | yes | yes | yes | OK |
-| 1a | drop | no | no | no | yes | NOT_IN_ENUM |
+| 1a | drop | yes | yes | yes | yes | OK |
 | 1b | select | yes | yes | yes | yes | OK |
 | 20 | local.get | yes | yes | yes | yes | OK |
 | 21 | local.set | yes | yes | yes | yes | OK |
