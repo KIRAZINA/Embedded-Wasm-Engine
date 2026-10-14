@@ -488,7 +488,8 @@ static void test_i64_alu(void)
     CHECK(run_flat(kRem0, sizeof(kRem0)) == WASM_TRAP_DIV_BY_ZERO, "i64 10%0 -> DIV_BY_ZERO");
     CHECK(run_flat(kRemU0, sizeof(kRemU0)) == WASM_TRAP_DIV_BY_ZERO, "i64 10%0u -> DIV_BY_ZERO");
     CHECK(run_flat(kMinDiv, sizeof(kMinDiv)) == WASM_TRAP_INTEGER_OVERFLOW, "i64 MIN/-1 div -> INTEGER_OVERFLOW");
-    CHECK(run_flat(kMinRem, sizeof(kMinRem)) == WASM_TRAP_INTEGER_OVERFLOW, "i64 MIN%-1 rem -> INTEGER_OVERFLOW");
+    CHECK(run_flat(kMinRem, sizeof(kMinRem)) == WASM_TRAP_OK, "i64 MIN%-1 rem runs (MVP, no trap)");
+    expect_i64(0, "i64 MIN%-1 rem == 0");
     CHECK(run_flat(kAnd, sizeof(kAnd)) == WASM_TRAP_OK, "run i64 12&10");
     expect_i64(8, "i64 12&10 == 8");
     CHECK(run_flat(kOr, sizeof(kOr)) == WASM_TRAP_OK, "run i64 12|10");

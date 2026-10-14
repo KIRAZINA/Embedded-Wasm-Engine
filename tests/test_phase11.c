@@ -476,6 +476,29 @@ static void test_corpus(void)
         check_body(sel_dead_cond, sizeof(sel_dead_cond), WASM_OK,
                    "select with pushed cond valid after unreachable");
     }
+    {
+        static const uint8_t table_label_oob[] = {
+            0x02u, 0x40u, 0x41u, 0x00u, 0x0Eu, 0x01u, 0x01u, 0x00u, 0x0Bu
+        };
+        static const uint8_t table_default_oob[] = {
+            0x02u, 0x40u, 0x41u, 0x00u, 0x0Eu, 0x00u, 0x05u, 0x0Bu
+        };
+        static const uint8_t table_over_cap[] = {
+            0x0Eu, 0x81u, 0x02u, 0x0Bu
+        };
+        static const uint8_t table_multi_ok[] = {
+            0x02u, 0x40u, 0x41u, 0x00u, 0x0Eu, 0x01u, 0x00u, 0x00u,
+            0x00u, 0x0Bu
+        };
+        check_body(table_label_oob, sizeof(table_label_oob),
+                   WASM_ERR_INVALID_LABEL, "br_table label >= depth rejected");
+        check_body(table_default_oob, sizeof(table_default_oob),
+                   WASM_ERR_INVALID_LABEL, "br_table default >= depth rejected");
+        check_body(table_over_cap, sizeof(table_over_cap),
+                   WASM_ERR_SECTION_OVERFLOW, "br_table count over cap rejected");
+        check_body(table_multi_ok, sizeof(table_multi_ok), WASM_OK,
+                   "br_table labels+default accepted");
+    }
     CHECK(validate_bytes(global_set_immutable, sizeof(global_set_immutable)) ==
           WASM_ERR_INVALID_GLOBAL, "immutable global.set");
     CHECK(validate_bytes(alignment_too_large, sizeof(alignment_too_large)) ==

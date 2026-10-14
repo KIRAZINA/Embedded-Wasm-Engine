@@ -1687,7 +1687,7 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
         }
         if (op == OP_I32_REM_S) {
             if (a == INT32_MIN && b == -1) {
-                return WASM_TRAP_INTEGER_OVERFLOW;
+                return vm_push_i32(vm, 0); /* MVP: MIN%-1 is 0, not a trap */
             }
             return vm_push_i32(vm, a % b);
         }
@@ -1837,7 +1837,7 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
         }
         if (op == OP_I64_REM_S) {
             if (a == INT64_MIN && b == -1) {
-                return WASM_TRAP_INTEGER_OVERFLOW;
+                return vm_push_i64(vm, 0); /* MVP: MIN%-1 is 0, not a trap */
             }
             return vm_push_i64(vm, a % b);
         }
