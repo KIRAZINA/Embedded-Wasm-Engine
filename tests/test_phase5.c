@@ -365,7 +365,12 @@ static void test_control_traps(void)
     }
     {
         static const uint8_t c[] = { 0x0B };
-        CHECK(exec_bytes(c, sizeof(c), 0u, 0u) == WASM_TRAP_CONTROL_STACK_UNDERFLOW, "lone END -> CONTROL_STACK_UNDERFLOW");
+        CHECK(exec_bytes(c, sizeof(c), 0u, 0u) == WASM_TRAP_OK, "lone END is the function-end marker (no-op)");
+    }
+    {
+        static const uint8_t c[] = { 0x41, 0x09, 0x0B };
+        CHECK(exec_bytes(c, sizeof(c), 0u, 0u) == WASM_TRAP_OK, "run const 9 + function end");
+        expect_i32(9, "value survives the function end");
     }
     {
         static const uint8_t c[] = { 0x04, 0x40, 0x0B };

@@ -13,11 +13,13 @@
  * - Typing-rule violations use the WASM_ERR_INVALID_* family, which
  *   only the body-typing machine (and friends) can produce.
  *
- * Engine-convention notes: bodies without a trailing 0x0B are accepted
- * (implicit end, matching execution); a trailing 0x0B closing an empty
- * control stack is also accepted. Block results accept all four MVP
- * valtypes (arity still at most one). Locals carry declared types.
- * Opcodes the interpreter cannot execute are INVALID_SECTION.
+ * Engine-convention notes: function bodies MUST end with an explicit
+ * function-level 0x0B (MVP strictness; bodies that fall off the code
+ * window are TRUNCATED, as are bodies with unclosed blocks). A trailing
+ * 0x0B closing an empty control stack is the function end marker.
+ * Block results accept all four MVP valtypes (arity still at most one).
+ * Locals carry declared types. Opcodes the interpreter cannot execute
+ * (reserved/non-MVP bytes) are INVALID_SECTION.
  */
 
 #include "wasm_validate.h"
@@ -1429,29 +1431,20 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
             }
             break;
         default:
-            /* Bytes the interpreter cannot execute (nop, drop, i64
-             * comparisons, sub-word/float memory ops, saturating
-             * conversions, ...) are undecodable into engine semantics. */
+            /* Bytes the interpreter cannot execute are undecodable into
+             * engine semantics. (All MVP opcodes are implemented; this
+             * fires only for reserved/non-MVP bytes.) */
             return WASM_ERR_INVALID_SECTION;
         }
     }
+    /* Strict function end (MVP): reaching the end of the code window
+     * without an explicit function-level 0x0B is malformed. The only way
+     * past the loop with acceptance is the `goto func_end` above, which
+     * runs solely at zero control depth. */
+    return WASM_ERR_TRUNCATED;
 func_end:
-    /* Implicit ends for still-open blocks (engine convention), then the
-     * function-result check. */
-    while (v->cdepth > 0u) {
-        vctrl_t f = v->cs[--v->cdepth];
-        rc = vclose_check(v, &f);
-        if (rc != WASM_OK) {
-            return rc;
-        }
-        v->vtop = f.height;
-        if (f.result != V_BLOCK_VOID) {
-            rc = vpush(v, f.result);
-            if (rc != WASM_OK) {
-                return rc;
-            }
-        }
-    }
+    /* All blocks are closed here (cdepth is 0 on arrival); check the
+     * function result against the final value stack. */
     if (v->result == V_BLOCK_VOID) {
         if (v->vtop != 0u && !v->func_unreachable) {
             return WASM_ERR_INVALID_TYPE;

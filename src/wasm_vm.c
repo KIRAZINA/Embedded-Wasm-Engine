@@ -1352,8 +1352,19 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
         return wasm_control_stack_pop(&f->ctrl, NULL);
     }
 
-    case OP_END:
-        return wasm_control_stack_pop(&f->ctrl, NULL);
+    case OP_END: {
+        /* A block/loop/if end pops one control entry. A function-level
+         * end (empty control stack) is the MVP function-end marker: a
+         * no-op here, after which the code window is consumed and the
+         * caller (run loop / CLI step loop) exits the frame. */
+        wasm_control_frame_t dropped;
+        tr = wasm_control_stack_pop(&f->ctrl, &dropped);
+        (void)dropped;
+        if (tr == WASM_TRAP_CONTROL_STACK_UNDERFLOW) {
+            return WASM_TRAP_OK;
+        }
+        return tr;
+    }
 
     case OP_BR: {
         uint32_t label = 0u;
