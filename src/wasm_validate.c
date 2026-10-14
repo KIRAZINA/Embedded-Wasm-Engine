@@ -1962,13 +1962,24 @@ wasm_err_t wasm_validate_module(const wasm_module_t *mod)
             return WASM_ERR_SECTION_OVERFLOW;
         }
         for (i = 0u; i < count; i++) {
-            uint32_t memidx = 0u, len = 0u;
+            uint32_t flags = 0u, memidx = 0u, len = 0u;
             uint8_t it;
-            rc = leb128_decode_u32(&cur, end, &memidx);
+            /* Segment flags: 0 = active on memory 0 (offset + bytes, no
+             * memidx); 2 = active with explicit memidx (must be 0).
+             * Passive (1) needs bulk-memory: reject. */
+            rc = leb128_decode_u32(&cur, end, &flags);
             if (rc != WASM_OK) {
                 return rc;
             }
-            if (memidx != 0u) {
+            if (flags == 2u) {
+                rc = leb128_decode_u32(&cur, end, &memidx);
+                if (rc != WASM_OK) {
+                    return rc;
+                }
+                if (memidx != 0u) {
+                    return WASM_ERR_INVALID_SECTION;
+                }
+            } else if (flags != 0u) {
                 return WASM_ERR_INVALID_SECTION;
             }
             rc = veval_init(&cur, end, &mc, mc.nimportglobals, &it);
@@ -2003,13 +2014,29 @@ wasm_err_t wasm_validate_module(const wasm_module_t *mod)
             return rc;
         }
         for (i = 0u; i < count; i++) {
-            uint32_t tableidx = 0u, len = 0u, k;
+            uint32_t flags = 0u, tableidx = 0u, len = 0u, k;
             uint8_t it;
-            rc = leb128_decode_u32(&cur, end, &tableidx);
+            int is_ref = 0;
+            /* Segment flags: 0 = active on table 0 (tableidx, offset,
+             * funcref vec); 2 = active with explicit tableidx (must be 0)
+             * and elemkind (must be 0x00 funcref); 4 = active on table 0
+             * with `ref.func` init-expr elements. Passive/declared/GC
+             * reftypes (1, 3, 5+) need post-MVP features: reject. */
+            rc = leb128_decode_u32(&cur, end, &flags);
             if (rc != WASM_OK) {
                 return rc;
             }
-            if (tableidx != 0u) {
+            if (flags == 0u || flags == 2u) {
+                rc = leb128_decode_u32(&cur, end, &tableidx);
+                if (rc != WASM_OK) {
+                    return rc;
+                }
+                if (tableidx != 0u) {
+                    return WASM_ERR_INVALID_SECTION;
+                }
+            } else if (flags == 4u) {
+                is_ref = 1;
+            } else {
                 return WASM_ERR_INVALID_SECTION;
             }
             rc = veval_init(&cur, end, &mc, mc.nimportglobals, &it);
@@ -2019,15 +2046,44 @@ wasm_err_t wasm_validate_module(const wasm_module_t *mod)
             if (it != (uint8_t)WASM_TYPE_I32) {
                 return WASM_ERR_INVALID_SECTION;
             }
+            if (flags == 2u) {
+                uint8_t elemkind;
+                if (!vreadable(cur, end, 1u)) {
+                    return WASM_ERR_TRUNCATED;
+                }
+                elemkind = *cur++;
+                if (elemkind != 0x00u) {
+                    return WASM_ERR_INVALID_SECTION;
+                }
+            }
             rc = leb128_decode_u32(&cur, end, &len);
             if (rc != WASM_OK) {
                 return rc;
             }
             for (k = 0u; k < len; k++) {
                 uint32_t fidx = 0u;
-                rc = leb128_decode_u32(&cur, end, &fidx);
-                if (rc != WASM_OK) {
-                    return rc;
+                if (is_ref) {
+                    uint8_t marker;
+                    if (!vreadable(cur, end, 1u)) {
+                        return WASM_ERR_TRUNCATED;
+                    }
+                    marker = *cur++;
+                    if (marker != 0xD2u) {
+                        return WASM_ERR_INVALID_SECTION;
+                    }
+                    rc = leb128_decode_u32(&cur, end, &fidx);
+                    if (rc != WASM_OK) {
+                        return rc;
+                    }
+                    if (!vreadable(cur, end, 1u) || *cur != 0x0Bu) {
+                        return WASM_ERR_INVALID_SECTION;
+                    }
+                    cur++;
+                } else {
+                    rc = leb128_decode_u32(&cur, end, &fidx);
+                    if (rc != WASM_OK) {
+                        return rc;
+                    }
                 }
                 if (fidx >= nfuncs) {
                     return WASM_ERR_INVALID_SECTION;
