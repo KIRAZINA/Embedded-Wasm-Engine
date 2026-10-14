@@ -304,6 +304,129 @@ static void test_corpus(void)
     }
 
     {
+        static const uint8_t i64_eqz[] = { 0x42u, 0x00u, 0x50u, 0x0Bu };
+        static const uint8_t i64_eq[] = {
+            0x42u, 0x01u, 0x42u, 0x02u, 0x51u, 0x0Bu
+        };
+        static const uint8_t i64_ne[] = {
+            0x42u, 0x01u, 0x42u, 0x02u, 0x52u, 0x0Bu
+        };
+        static const uint8_t i64_lt_s[] = {
+            0x42u, 0x01u, 0x42u, 0x02u, 0x53u, 0x0Bu
+        };
+        static const uint8_t i64_lt_u[] = {
+            0x42u, 0x01u, 0x42u, 0x02u, 0x54u, 0x0Bu
+        };
+        static const uint8_t i64_gt_s[] = {
+            0x42u, 0x01u, 0x42u, 0x02u, 0x55u, 0x0Bu
+        };
+        static const uint8_t i64_gt_u[] = {
+            0x42u, 0x01u, 0x42u, 0x02u, 0x56u, 0x0Bu
+        };
+        static const uint8_t i64_le_s[] = {
+            0x42u, 0x01u, 0x42u, 0x02u, 0x57u, 0x0Bu
+        };
+        static const uint8_t i64_le_u[] = {
+            0x42u, 0x01u, 0x42u, 0x02u, 0x58u, 0x0Bu
+        };
+        static const uint8_t i64_ge_s[] = {
+            0x42u, 0x01u, 0x42u, 0x02u, 0x59u, 0x0Bu
+        };
+        static const uint8_t i64_ge_u[] = {
+            0x42u, 0x01u, 0x42u, 0x02u, 0x5Au, 0x0Bu
+        };
+        static const uint8_t clz[] = { 0x41u, 0x05u, 0x67u, 0x0Bu };
+        static const uint8_t ctz[] = { 0x41u, 0x05u, 0x68u, 0x0Bu };
+        static const uint8_t popcnt[] = { 0x41u, 0x05u, 0x69u, 0x0Bu };
+        static const uint8_t rotl[] = {
+            0x41u, 0x01u, 0x41u, 0x02u, 0x77u, 0x0Bu
+        };
+        static const uint8_t rotr[] = {
+            0x41u, 0x01u, 0x41u, 0x02u, 0x78u, 0x0Bu
+        };
+        static const uint8_t i64_clz[] = { 0x42u, 0x05u, 0x79u, 0x0Bu };
+        static const uint8_t i64_ctz[] = { 0x42u, 0x05u, 0x7Au, 0x0Bu };
+        static const uint8_t i64_popcnt[] = { 0x42u, 0x05u, 0x7Bu, 0x0Bu };
+        static const uint8_t i64_rotl[] = {
+            0x42u, 0x01u, 0x42u, 0x02u, 0x89u, 0x0Bu
+        };
+        static const uint8_t i64_rotr[] = {
+            0x42u, 0x01u, 0x42u, 0x02u, 0x8Au, 0x0Bu
+        };
+        static const uint8_t wrap[] = { 0x42u, 0x05u, 0xA7u, 0x0Bu };
+        static const uint8_t extend_s[] = { 0x41u, 0x7Fu, 0xACu, 0x0Bu };
+        static const uint8_t extend_u[] = { 0x41u, 0x7Fu, 0xADu, 0x0Bu };
+        static const uint8_t i64_eq_bad[] = {
+            0x41u, 0x01u, 0x42u, 0x02u, 0x51u, 0x0Bu
+        };
+        static const uint8_t i64_eqz_bad[] = { 0x41u, 0x01u, 0x50u, 0x0Bu };
+        static const uint8_t clz_bad[] = { 0x42u, 0x05u, 0x67u, 0x0Bu };
+        static const uint8_t rotl_bad[] = {
+            0x42u, 0x01u, 0x42u, 0x02u, 0x77u, 0x0Bu
+        };
+        static const uint8_t wrap_bad[] = { 0x41u, 0x01u, 0xA7u, 0x0Bu };
+        static const uint8_t extend_bad[] = { 0x42u, 0x05u, 0xACu, 0x0Bu };
+        check_result_body(0x7Fu, i64_eqz, sizeof(i64_eqz), WASM_OK,
+                          "i64.eqz accepted");
+        check_result_body(0x7Fu, i64_eq, sizeof(i64_eq), WASM_OK,
+                          "i64.eq accepted");
+        check_result_body(0x7Fu, i64_ne, sizeof(i64_ne), WASM_OK,
+                          "i64.ne accepted");
+        check_result_body(0x7Fu, i64_lt_s, sizeof(i64_lt_s), WASM_OK,
+                          "i64.lt_s accepted");
+        check_result_body(0x7Fu, i64_lt_u, sizeof(i64_lt_u), WASM_OK,
+                          "i64.lt_u accepted");
+        check_result_body(0x7Fu, i64_gt_s, sizeof(i64_gt_s), WASM_OK,
+                          "i64.gt_s accepted");
+        check_result_body(0x7Fu, i64_gt_u, sizeof(i64_gt_u), WASM_OK,
+                          "i64.gt_u accepted");
+        check_result_body(0x7Fu, i64_le_s, sizeof(i64_le_s), WASM_OK,
+                          "i64.le_s accepted");
+        check_result_body(0x7Fu, i64_le_u, sizeof(i64_le_u), WASM_OK,
+                          "i64.le_u accepted");
+        check_result_body(0x7Fu, i64_ge_s, sizeof(i64_ge_s), WASM_OK,
+                          "i64.ge_s accepted");
+        check_result_body(0x7Fu, i64_ge_u, sizeof(i64_ge_u), WASM_OK,
+                          "i64.ge_u accepted");
+        check_result_body(0x7Fu, clz, sizeof(clz), WASM_OK, "i32.clz accepted");
+        check_result_body(0x7Fu, ctz, sizeof(ctz), WASM_OK, "i32.ctz accepted");
+        check_result_body(0x7Fu, popcnt, sizeof(popcnt), WASM_OK,
+                          "i32.popcnt accepted");
+        check_result_body(0x7Fu, rotl, sizeof(rotl), WASM_OK,
+                          "i32.rotl accepted");
+        check_result_body(0x7Fu, rotr, sizeof(rotr), WASM_OK,
+                          "i32.rotr accepted");
+        check_result_body(0x7Eu, i64_clz, sizeof(i64_clz), WASM_OK,
+                          "i64.clz accepted");
+        check_result_body(0x7Eu, i64_ctz, sizeof(i64_ctz), WASM_OK,
+                          "i64.ctz accepted");
+        check_result_body(0x7Eu, i64_popcnt, sizeof(i64_popcnt), WASM_OK,
+                          "i64.popcnt accepted");
+        check_result_body(0x7Eu, i64_rotl, sizeof(i64_rotl), WASM_OK,
+                          "i64.rotl accepted");
+        check_result_body(0x7Eu, i64_rotr, sizeof(i64_rotr), WASM_OK,
+                          "i64.rotr accepted");
+        check_result_body(0x7Fu, wrap, sizeof(wrap), WASM_OK,
+                          "i32.wrap_i64 accepted");
+        check_result_body(0x7Eu, extend_s, sizeof(extend_s), WASM_OK,
+                          "i64.extend_i32_s accepted");
+        check_result_body(0x7Eu, extend_u, sizeof(extend_u), WASM_OK,
+                          "i64.extend_i32_u accepted");
+        check_body(i64_eq_bad, sizeof(i64_eq_bad), WASM_ERR_INVALID_TYPE,
+                   "i64.eq mixed operands rejected");
+        check_body(i64_eqz_bad, sizeof(i64_eqz_bad), WASM_ERR_INVALID_TYPE,
+                   "i64.eqz i32 operand rejected");
+        check_body(clz_bad, sizeof(clz_bad), WASM_ERR_INVALID_TYPE,
+                   "i32.clz i64 operand rejected");
+        check_body(rotl_bad, sizeof(rotl_bad), WASM_ERR_INVALID_TYPE,
+                   "i32.rotl i64 operands rejected");
+        check_body(wrap_bad, sizeof(wrap_bad), WASM_ERR_INVALID_TYPE,
+                   "wrap i32 operand rejected");
+        check_body(extend_bad, sizeof(extend_bad), WASM_ERR_INVALID_TYPE,
+                   "extend i64 operand rejected");
+    }
+
+    {
         static const uint8_t sel_i32[] = {
             0x41u, 0x0Au, 0x41u, 0x14u, 0x41u, 0x01u, 0x1Bu, 0x0Bu
         };

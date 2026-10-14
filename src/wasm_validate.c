@@ -1037,6 +1037,30 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
                 return rc;
             }
             break;
+        case 0x50u: /* i64.eqz: i64 -> i32 */
+            rc = vpop_expect(v, (uint8_t)WASM_TYPE_I64);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpush(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
+        case 0x51u: case 0x52u: case 0x53u: case 0x54u: case 0x55u:
+        case 0x56u: case 0x57u: case 0x58u: case 0x59u: case 0x5Au:
+            /* i64 comparisons: (i64,i64) -> i32 */
+            rc = vpop_operands(v, (const uint8_t[]){ (uint8_t)WASM_TYPE_I64,
+                                                     (uint8_t)WASM_TYPE_I64 },
+                               2u);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpush(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
         case 0x5Bu: case 0x5Cu: case 0x5Du: case 0x5Eu: case 0x5Fu:
         case 0x60u:
             /* f32 comparisons: (f32,f32) -> i32 */
@@ -1065,10 +1089,21 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
                 return rc;
             }
             break;
+        case 0x67u: case 0x68u: case 0x69u:
+            /* i32 bit-count unaries: i32 -> i32 */
+            rc = vpop_expect(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpush(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
         case 0x6Au: case 0x6Bu: case 0x6Cu: case 0x6Du: case 0x6Eu:
         case 0x6Fu: case 0x70u: case 0x71u: case 0x72u: case 0x73u:
-        case 0x74u: case 0x75u: case 0x76u:
-            /* i32 ALU: (i32,i32) -> i32 */
+        case 0x74u: case 0x75u: case 0x76u: case 0x77u: case 0x78u:
+            /* i32 ALU (incl. rotates): (i32,i32) -> i32 */
             rc = vpop_operands(v, (const uint8_t[]){ (uint8_t)WASM_TYPE_I32,
                                                      (uint8_t)WASM_TYPE_I32 },
                                2u);
@@ -1080,10 +1115,21 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
                 return rc;
             }
             break;
+        case 0x79u: case 0x7Au: case 0x7Bu:
+            /* i64 bit-count unaries: i64 -> i64 */
+            rc = vpop_expect(v, (uint8_t)WASM_TYPE_I64);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpush(v, (uint8_t)WASM_TYPE_I64);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
         case 0x7Cu: case 0x7Du: case 0x7Eu: case 0x7Fu: case 0x80u:
         case 0x81u: case 0x82u: case 0x83u: case 0x84u: case 0x85u:
-        case 0x86u: case 0x87u: case 0x88u:
-            /* i64 ALU: (i64,i64) -> i64 */
+        case 0x86u: case 0x87u: case 0x88u: case 0x89u: case 0x8Au:
+            /* i64 ALU (incl. rotates): (i64,i64) -> i64 */
             rc = vpop_operands(v, (const uint8_t[]){ (uint8_t)WASM_TYPE_I64,
                                                      (uint8_t)WASM_TYPE_I64 },
                                2u);
@@ -1147,6 +1193,17 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
                 return rc;
             }
             break;
+        case 0xA7u:
+            /* i32.wrap_i64: i64 -> i32 */
+            rc = vpop_expect(v, (uint8_t)WASM_TYPE_I64);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpush(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
         case 0xA8u:
             /* i32.trunc_f32_s: f32 -> i32 */
             rc = vpop_expect(v, (uint8_t)WASM_TYPE_F32);
@@ -1187,6 +1244,18 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
                 return rc;
             }
             rc = vpush(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
+        case 0xACu:
+        case 0xADu:
+            /* i64.extend_i32_s/u: i32 -> i64 */
+            rc = vpop_expect(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpush(v, (uint8_t)WASM_TYPE_I64);
             if (rc != WASM_OK) {
                 return rc;
             }

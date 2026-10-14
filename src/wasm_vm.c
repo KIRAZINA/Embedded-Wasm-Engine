@@ -923,6 +923,27 @@ static wasm_trap_t vm_scan_block(const uint8_t *from, const uint8_t *end,
         case OP_I32_LE_U:
         case OP_I32_GE_S:
         case OP_I32_GE_U:
+        case OP_I64_EQZ:
+        case OP_I64_EQ:
+        case OP_I64_NE:
+        case OP_I64_LT_S:
+        case OP_I64_LT_U:
+        case OP_I64_GT_S:
+        case OP_I64_GT_U:
+        case OP_I64_LE_S:
+        case OP_I64_LE_U:
+        case OP_I64_GE_S:
+        case OP_I64_GE_U:
+        case OP_I32_CLZ:
+        case OP_I32_CTZ:
+        case OP_I32_POPCNT:
+        case OP_I32_ROTL:
+        case OP_I32_ROTR:
+        case OP_I64_CLZ:
+        case OP_I64_CTZ:
+        case OP_I64_POPCNT:
+        case OP_I64_ROTL:
+        case OP_I64_ROTR:
         case OP_I32_ADD:
         case OP_I32_SUB:
         case OP_I32_MUL:
@@ -989,6 +1010,9 @@ static wasm_trap_t vm_scan_block(const uint8_t *from, const uint8_t *end,
         case OP_F64_MIN:
         case OP_F64_MAX:
         case OP_F64_COPYSIGN:
+        case OP_I32_WRAP_I64:
+        case OP_I64_EXTEND_I32_S:
+        case OP_I64_EXTEND_I32_U:
         case OP_I32_TRUNC_F32_S:
         case OP_I32_TRUNC_F32_U:
         case OP_I32_TRUNC_F64_S:
@@ -1698,6 +1722,70 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
         }
     }
 
+    case OP_I32_CLZ:
+    case OP_I32_CTZ:
+    case OP_I32_POPCNT: {
+        /* Bit counts over the raw u32 pattern. clz/ctz of 0 give 32.
+         * Plain unsigned shifts only: no C UB, no builtins. */
+        wasm_val_t v;
+        uint32_t x;
+        uint32_t r = 0u;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        memcpy(&x, &v.value.i32, sizeof(x));
+        if (op == OP_I32_CLZ) {
+            if (x == 0u) {
+                r = 32u;
+            } else {
+                while ((x & 0x80000000u) == 0u) {
+                    x <<= 1u;
+                    r++;
+                }
+            }
+        } else if (op == OP_I32_CTZ) {
+            if (x == 0u) {
+                r = 32u;
+            } else {
+                while ((x & 1u) == 0u) {
+                    x >>= 1u;
+                    r++;
+                }
+            }
+        } else {
+            while (x != 0u) {
+                r += x & 1u;
+                x >>= 1u;
+            }
+        }
+        return vm_push_i32(vm, vm_u2s(r));
+    }
+
+    case OP_I32_ROTL:
+    case OP_I32_ROTR: {
+        /* Rotate by (count mod 32); a zero count is the identity (shifting
+         * by 32 would be C UB, so it is special-cased, not masked away). */
+        int32_t a = 0, b = 0;
+        uint32_t x;
+        uint32_t n;
+        uint32_t r;
+        tr = vm_pop2_i32(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        memcpy(&x, &a, sizeof(x));
+        n = (uint32_t)b & 31u;
+        if (n == 0u) {
+            r = x;
+        } else if (op == OP_I32_ROTL) {
+            r = (x << n) | (x >> (32u - n));
+        } else {
+            r = (x >> n) | (x << (32u - n));
+        }
+        return vm_push_i32(vm, vm_u2s(r));
+    }
+
     case OP_I64_ADD:
     case OP_I64_SUB:
     case OP_I64_MUL:
@@ -1782,6 +1870,70 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
             }
             return vm_push_i64(vm, vm_u2s64(r));
         }
+    }
+
+    case OP_I64_CLZ:
+    case OP_I64_CTZ:
+    case OP_I64_POPCNT: {
+        /* Bit counts over the raw u64 pattern. clz/ctz of 0 give 64.
+         * Plain unsigned shifts only: no C UB, no builtins. */
+        wasm_val_t v;
+        uint64_t x = 0u;
+        uint64_t r = 0u;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        memcpy(&x, &v.value.i64, sizeof(x));
+        if (op == OP_I64_CLZ) {
+            if (x == 0u) {
+                r = 64u;
+            } else {
+                while ((x & 0x8000000000000000uLL) == 0u) {
+                    x <<= 1u;
+                    r++;
+                }
+            }
+        } else if (op == OP_I64_CTZ) {
+            if (x == 0u) {
+                r = 64u;
+            } else {
+                while ((x & 1u) == 0u) {
+                    x >>= 1u;
+                    r++;
+                }
+            }
+        } else {
+            while (x != 0u) {
+                r += x & 1u;
+                x >>= 1u;
+            }
+        }
+        return vm_push_i64(vm, vm_u2s64(r));
+    }
+
+    case OP_I64_ROTL:
+    case OP_I64_ROTR: {
+        /* Rotate by (count mod 64); a zero count is the identity
+         * (shifting by 64 would be C UB, so it is special-cased). */
+        int64_t a = 0, b = 0;
+        uint64_t x = 0u;
+        uint64_t n;
+        uint64_t r;
+        tr = vm_pop2_i64(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        memcpy(&x, &a, sizeof(x));
+        n = (uint64_t)b & 63u;
+        if (n == 0u) {
+            r = x;
+        } else if (op == OP_I64_ROTL) {
+            r = (x << n) | (x >> (64u - n));
+        } else {
+            r = (x >> n) | (x << (64u - n));
+        }
+        return vm_push_i64(vm, vm_u2s64(r));
     }
 
     /* ================= Float arithmetic (IEEE-754; S1: float division by
@@ -2297,6 +2449,36 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
         return vm_push_f64(vm, vm_bits_f64((uint64_t)v.value.i64));
     }
 
+    case OP_I32_WRAP_I64: {
+        /* Keep the low 32 bits; bit-exact via the u32 reinterpreter. */
+        wasm_val_t v;
+        uint64_t w = 0u;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        memcpy(&w, &v.value.i64, sizeof(w));
+        return vm_push_i32(vm, vm_u2s((uint32_t)(w & 0xFFFFFFFFu)));
+    }
+
+    case OP_I64_EXTEND_I32_S:
+    case OP_I64_EXTEND_I32_U: {
+        /* Widen the i32 bit pattern; sign-extend only for _S. The OR
+         * form reuses the u64 reinterpreter (no implementation-defined
+         * signed conversion anywhere). */
+        wasm_val_t v;
+        uint32_t w = 0u;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        memcpy(&w, &v.value.i32, sizeof(w));
+        if (op == OP_I64_EXTEND_I32_S && (w & 0x80000000u) != 0u) {
+            return vm_push_i64(vm, vm_u2s64((uint64_t)w | 0xFFFFFFFF00000000uLL));
+        }
+        return vm_push_i64(vm, (int64_t)w);
+    }
+
     case OP_I32_EQZ: {
         wasm_val_t v;
         tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &v);
@@ -2333,6 +2515,46 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
         case OP_I32_LE_U: cond = ((uint32_t)a <= (uint32_t)b); break;
         case OP_I32_GE_S: cond = (a >= b); break;
         default:          cond = ((uint32_t)a >= (uint32_t)b); break; /* GE_U */
+        }
+        return vm_push_bool(vm, cond);
+    }
+
+    case OP_I64_EQZ: {
+        wasm_val_t v;
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_bool(vm, v.value.i64 == 0);
+    }
+
+    case OP_I64_EQ:
+    case OP_I64_NE:
+    case OP_I64_LT_S:
+    case OP_I64_LT_U:
+    case OP_I64_GT_S:
+    case OP_I64_GT_U:
+    case OP_I64_LE_S:
+    case OP_I64_LE_U:
+    case OP_I64_GE_S:
+    case OP_I64_GE_U: {
+        int64_t a = 0, b = 0;
+        int cond = 0;
+        tr = vm_pop2_i64(vm, &a, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        switch (op) {
+        case OP_I64_EQ:   cond = (a == b); break;
+        case OP_I64_NE:   cond = (a != b); break;
+        case OP_I64_LT_S: cond = (a < b); break;
+        case OP_I64_LT_U: cond = ((uint64_t)a < (uint64_t)b); break;
+        case OP_I64_GT_S: cond = (a > b); break;
+        case OP_I64_GT_U: cond = ((uint64_t)a > (uint64_t)b); break;
+        case OP_I64_LE_S: cond = (a <= b); break;
+        case OP_I64_LE_U: cond = ((uint64_t)a <= (uint64_t)b); break;
+        case OP_I64_GE_S: cond = (a >= b); break;
+        default:          cond = ((uint64_t)a >= (uint64_t)b); break; /* GE_U */
         }
         return vm_push_bool(vm, cond);
     }

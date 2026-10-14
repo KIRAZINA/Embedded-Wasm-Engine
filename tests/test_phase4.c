@@ -193,6 +193,52 @@ static void check_binop_trap(int32_t a, int32_t b, uint8_t op, wasm_trap_t want,
     CHECK(exec_bytes(code, n, 0u, 0u) == want, name);
 }
 
+/* Build [i64.const a, i64.const b, op], run, expect one i64 result. */
+static void check_i64_binop(int64_t a, int64_t b, uint8_t op, int64_t want, const char *name)
+{
+    uint8_t code[32];
+    size_t n = 0u;
+    code[n++] = 0x42u; n += enc_s64(code + n, a);
+    code[n++] = 0x42u; n += enc_s64(code + n, b);
+    code[n++] = op;
+    CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, name);
+    expect_i64(want, name);
+}
+
+/* Build [i64.const a, op], run, expect one i64 result. */
+static void check_i64_unop(int64_t a, uint8_t op, int64_t want, const char *name)
+{
+    uint8_t code[24];
+    size_t n = 0u;
+    code[n++] = 0x42u; n += enc_s64(code + n, a);
+    code[n++] = op;
+    CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, name);
+    expect_i64(want, name);
+}
+
+/* Build [i64.const a, i64.const b, op], run, expect one i32 result. */
+static void check_i64_cmp(int64_t a, int64_t b, uint8_t op, int32_t want, const char *name)
+{
+    uint8_t code[32];
+    size_t n = 0u;
+    code[n++] = 0x42u; n += enc_s64(code + n, a);
+    code[n++] = 0x42u; n += enc_s64(code + n, b);
+    code[n++] = op;
+    CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, name);
+    expect_i32(want, name);
+}
+
+/* Build [i32.const a, op], run, expect one i32 result. */
+static void check_unop(int32_t a, uint8_t op, int32_t want, const char *name)
+{
+    uint8_t code[16];
+    size_t n = 0u;
+    code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, a);
+    code[n++] = op;
+    CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, name);
+    expect_i32(want, name);
+}
+
 /* ---------- a) arithmetic: (10 + 20) * 3 = 90 ---------- */
 
 static void test_arith_basic(void)
@@ -365,6 +411,155 @@ static void test_mem_ops(void)
         CHECK(wasm_mem_write_i32(&g_mem, 200u, -123456) == WASM_TRAP_OK, "alias write");
         CHECK(wasm_mem_read_i32(&g_mem, 200u, &v) == WASM_TRAP_OK && v == -123456, "alias read round-trip");
     }
+}
+
+/* Build [i64.const a, wrap], run, expect one i32 result. */
+static void check_wrap(int64_t a, int32_t want, const char *name)
+{
+    uint8_t code[24];
+    size_t n = 0u;
+    code[n++] = 0x42u; n += enc_s64(code + n, a);
+    code[n++] = (uint8_t)OP_I32_WRAP_I64;
+    CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, name);
+    expect_i32(want, name);
+}
+
+static void test_bitops_i64(void)
+{
+    printf("[T] I32/I64 BIT COUNTS, ROTATES, I64 COMPARE, WRAP/EXTEND\n");
+    check_unop(0, (uint8_t)OP_I32_CLZ, 32, "clz(0) == 32");
+    check_unop(1, (uint8_t)OP_I32_CLZ, 31, "clz(1) == 31");
+    check_unop((int32_t)0x80000000u, (uint8_t)OP_I32_CLZ, 0, "clz(0x80000000) == 0");
+    check_unop(0x00F00000, (uint8_t)OP_I32_CLZ, 8, "clz(0x00F00000) == 8");
+    check_unop(0, (uint8_t)OP_I32_CTZ, 32, "ctz(0) == 32");
+    check_unop(1, (uint8_t)OP_I32_CTZ, 0, "ctz(1) == 0");
+    check_unop((int32_t)0x80000000u, (uint8_t)OP_I32_CTZ, 31, "ctz(0x80000000) == 31");
+    check_unop(0x00001000, (uint8_t)OP_I32_CTZ, 12, "ctz(0x1000) == 12");
+    check_unop(0, (uint8_t)OP_I32_POPCNT, 0, "popcnt(0) == 0");
+    check_unop(-1, (uint8_t)OP_I32_POPCNT, 32, "popcnt(-1) == 32");
+    check_unop(0x0F0F0F0F, (uint8_t)OP_I32_POPCNT, 16, "popcnt(0x0F0F0F0F) == 16");
+    check_binop((int32_t)0x80000001u, 1, (uint8_t)OP_I32_ROTL, 3, "rotl(0x80000001,1) == 3");
+    check_binop((int32_t)0x80000001u, 1, (uint8_t)OP_I32_ROTR, (int32_t)0xC0000000u, "rotr(0x80000001,1) == 0xC0000000");
+    check_binop(0x12345678, 0, (uint8_t)OP_I32_ROTL, 0x12345678, "rotl(x,0) == x");
+    check_binop(0x12345678, 32, (uint8_t)OP_I32_ROTR, 0x12345678, "rotr(x,32) == x");
+    check_binop(0x12345678, 36, (uint8_t)OP_I32_ROTL, 0x23456781, "rotl(x,36) == rotl(x,4)");
+    check_binop(0x12345678, -4, (uint8_t)OP_I32_ROTR, 0x23456781, "rotr(x,-4) == rotl(x,4)");
+    check_i64_unop(0, (uint8_t)OP_I64_CLZ, 64, "i64 clz(0) == 64");
+    check_i64_unop(1, (uint8_t)OP_I64_CLZ, 63, "i64 clz(1) == 63");
+    check_i64_unop((int64_t)0x8000000000000000LL, (uint8_t)OP_I64_CLZ, 0, "i64 clz(top) == 0");
+    check_i64_unop(0, (uint8_t)OP_I64_CTZ, 64, "i64 ctz(0) == 64");
+    check_i64_unop((int64_t)0x8000000000000000LL, (uint8_t)OP_I64_CTZ, 63, "i64 ctz(top) == 63");
+    check_i64_unop(0, (uint8_t)OP_I64_POPCNT, 0, "i64 popcnt(0) == 0");
+    check_i64_unop(-1, (uint8_t)OP_I64_POPCNT, 64, "i64 popcnt(-1) == 64");
+    check_i64_unop((int64_t)0x0F0F0F0F0F0F0F0FLL, (uint8_t)OP_I64_POPCNT, 32, "i64 popcnt(0x0F..) == 32");
+    check_i64_binop(1, 63, (uint8_t)OP_I64_ROTL, (int64_t)0x8000000000000000LL, "i64 rotl(1,63) == top");
+    check_i64_binop(1, 1, (uint8_t)OP_I64_ROTR, (int64_t)0x8000000000000000LL, "i64 rotr(1,1) == top");
+    check_i64_binop((int64_t)0x123456789ABCDEF0LL, 0, (uint8_t)OP_I64_ROTL, (int64_t)0x123456789ABCDEF0LL, "i64 rotl(x,0) == x");
+    check_i64_binop((int64_t)0x123456789ABCDEF0LL, 64, (uint8_t)OP_I64_ROTR, (int64_t)0x123456789ABCDEF0LL, "i64 rotr(x,64) == x");
+    check_i64_binop((int64_t)0x123456789ABCDEF0LL, 68, (uint8_t)OP_I64_ROTL, (int64_t)0x23456789ABCDEF01LL, "i64 rotl(x,68) == rotl(x,4)");
+    {
+        uint8_t code[24];
+        size_t n = 0u;
+        code[n++] = 0x42u; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I64_EQZ;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run i64.eqz(0)");
+        expect_i32(1, "i64.eqz(0) -> 1");
+    }
+    {
+        uint8_t code[24];
+        size_t n = 0u;
+        code[n++] = 0x42u; n += enc_s64(code + n, 5);
+        code[n++] = (uint8_t)OP_I64_EQZ;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run i64.eqz(5)");
+        expect_i32(0, "i64.eqz(5) -> 0");
+    }
+    check_i64_cmp(10, 10, (uint8_t)OP_I64_EQ, 1, "i64 10==10 -> 1");
+    check_i64_cmp(10, 20, (uint8_t)OP_I64_EQ, 0, "i64 10==20 -> 0");
+    check_i64_cmp(10, 20, (uint8_t)OP_I64_NE, 1, "i64 10!=20 -> 1");
+    check_i64_cmp(-1, 1, (uint8_t)OP_I64_LT_S, 1, "i64 -1<1 signed -> 1");
+    check_i64_cmp(-1, 1, (uint8_t)OP_I64_LT_U, 0, "i64 -1<1 unsigned -> 0");
+    check_i64_cmp(1, -1, (uint8_t)OP_I64_LT_U, 1, "i64 1<-1 unsigned -> 1");
+    check_i64_cmp(-1, 1, (uint8_t)OP_I64_GT_U, 1, "i64 -1>1 unsigned -> 1");
+    check_i64_cmp(1, -1, (uint8_t)OP_I64_GT_U, 0, "i64 1>-1 unsigned -> 0");
+    check_i64_cmp(20, 10, (uint8_t)OP_I64_GT_S, 1, "i64 20>10 signed -> 1");
+    check_i64_cmp(-1, 1, (uint8_t)OP_I64_LE_U, 0, "i64 -1<=1 unsigned -> 0");
+    check_i64_cmp(5, 5, (uint8_t)OP_I64_LE_S, 1, "i64 5<=5 -> 1");
+    check_i64_cmp(5, 5, (uint8_t)OP_I64_GE_S, 1, "i64 5>=5 -> 1");
+    check_i64_cmp(-1, 1, (uint8_t)OP_I64_GE_U, 1, "i64 -1>=1 unsigned -> 1");
+    check_i64_cmp(4, 5, (uint8_t)OP_I64_GE_S, 0, "i64 4>=5 -> 0");
+    check_wrap(-1, -1, "wrap(-1) == -1");
+    check_wrap((int64_t)0x100000000LL, 0, "wrap(2^32) == 0");
+    check_wrap((int64_t)0x1FFFFFFFFLL, -1, "wrap(2^33-1) == -1");
+    {
+        uint8_t code[24];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, -1);
+        code[n++] = (uint8_t)OP_I64_EXTEND_I32_S;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run extend_s(-1)");
+        expect_i64(-1, "extend_s(-1) == -1");
+    }
+    {
+        uint8_t code[24];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, -1);
+        code[n++] = (uint8_t)OP_I64_EXTEND_I32_U;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run extend_u(-1)");
+        expect_i64((int64_t)4294967295u, "extend_u(-1) == 4294967295");
+    }
+    {
+        uint8_t code[24];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, (int32_t)0x80000000u);
+        code[n++] = (uint8_t)OP_I64_EXTEND_I32_S;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run extend_s(INT32_MIN)");
+        expect_i64((int64_t)0xFFFFFFFF80000000LL, "extend_s(MIN) == 0xFFFFFFFF80000000");
+    }
+    {
+        uint8_t code[24];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, (int32_t)0x80000000u);
+        code[n++] = (uint8_t)OP_I64_EXTEND_I32_U;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run extend_u(INT32_MIN)");
+        expect_i64((int64_t)2147483648u, "extend_u(MIN) == 2147483648");
+    }
+    { /* mistyped operands trap cleanly. */
+        uint8_t k1[16];
+        size_t n = 0u;
+        uint8_t k2[24];
+        size_t m = 0u;
+        uint8_t k3[24];
+        size_t q = 0u;
+        k1[n++] = 0x42u; k1[n++] = 0x05;
+        k1[n++] = (uint8_t)OP_I32_CLZ;
+        CHECK(exec_bytes(k1, n, 0u, 0u) == WASM_TRAP_TYPE_MISMATCH, "clz i64 -> TYPE_MISMATCH");
+        k2[m++] = (uint8_t)OP_I32_CONST; m += enc_s32(k2 + m, 7);
+        k2[m++] = (uint8_t)OP_I32_WRAP_I64;
+        CHECK(exec_bytes(k2, m, 0u, 0u) == WASM_TRAP_TYPE_MISMATCH, "wrap i32 -> TYPE_MISMATCH");
+        k3[q++] = 0x42u; k3[q++] = 0x05;
+        k3[q++] = (uint8_t)OP_I64_EXTEND_I32_S;
+        CHECK(exec_bytes(k3, q, 0u, 0u) == WASM_TRAP_TYPE_MISMATCH, "extend i64 -> TYPE_MISMATCH");
+    }
+    { /* i64.eq with mixed operand types traps. */
+        uint8_t code[24];
+        size_t n = 0u;
+        code[n++] = 0x42u; code[n++] = 0x01;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 1);
+        code[n++] = (uint8_t)OP_I64_EQ;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_TYPE_MISMATCH, "i64.eq mixed -> TYPE_MISMATCH");
+    }
+    CHECK((uint8_t)OP_I32_CLZ == 0x67u && (uint8_t)OP_I32_CTZ == 0x68u &&
+          (uint8_t)OP_I32_POPCNT == 0x69u && (uint8_t)OP_I32_ROTL == 0x77u &&
+          (uint8_t)OP_I32_ROTR == 0x78u && (uint8_t)OP_I64_CLZ == 0x79u &&
+          (uint8_t)OP_I64_CTZ == 0x7Au && (uint8_t)OP_I64_POPCNT == 0x7Bu &&
+          (uint8_t)OP_I64_ROTL == 0x89u && (uint8_t)OP_I64_ROTR == 0x8Au &&
+          (uint8_t)OP_I64_EQZ == 0x50u && (uint8_t)OP_I64_EQ == 0x51u &&
+          (uint8_t)OP_I64_NE == 0x52u && (uint8_t)OP_I64_LT_S == 0x53u &&
+          (uint8_t)OP_I64_LT_U == 0x54u && (uint8_t)OP_I64_GT_S == 0x55u &&
+          (uint8_t)OP_I64_GT_U == 0x56u && (uint8_t)OP_I64_LE_S == 0x57u &&
+          (uint8_t)OP_I64_LE_U == 0x58u && (uint8_t)OP_I64_GE_S == 0x59u &&
+          (uint8_t)OP_I64_GE_U == 0x5Au && (uint8_t)OP_I32_WRAP_I64 == 0xA7u &&
+          (uint8_t)OP_I64_EXTEND_I32_S == 0xACu &&
+          (uint8_t)OP_I64_EXTEND_I32_U == 0xADu, "alu opcode encodings");
 }
 
 /* ---------- consts, locals-via-step, misc traps ---------- */
@@ -827,6 +1022,7 @@ int main(void)
     test_mem_ops();
     test_mem_float();
     test_mem_extended();
+    test_bitops_i64();
     test_consts_locals_traps();
     test_footprint();
     printf("--------------------------------------------\n");

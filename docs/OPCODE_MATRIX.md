@@ -22,11 +22,11 @@ The VM `wasm_vm_step` switch `default:` returns
 
 | verdict | count |
 |---|---:|
-| OK | 134 |
+| OK | 158 |
 | UNTESTED | 14 |
 | MISSING_IN_VALIDATOR | 0 |
 | MISSING_IN_VM | 0 |
-| NOT_IN_ENUM | 24 |
+| NOT_IN_ENUM | 0 |
 
 ## Matrix
 
@@ -92,17 +92,17 @@ The VM `wasm_vm_step` switch `default:` returns
 | 4d | i32.le_u | yes | yes | yes | yes | OK |
 | 4e | i32.ge_s | yes | yes | yes | yes | OK |
 | 4f | i32.ge_u | yes | yes | yes | yes | OK |
-| 50 | i64.eqz | no | no | no | no | NOT_IN_ENUM |
-| 51 | i64.eq | no | no | no | no | NOT_IN_ENUM |
-| 52 | i64.ne | no | no | no | no | NOT_IN_ENUM |
-| 53 | i64.lt_s | no | no | no | no | NOT_IN_ENUM |
-| 54 | i64.lt_u | no | no | no | no | NOT_IN_ENUM |
-| 55 | i64.gt_s | no | no | no | no | NOT_IN_ENUM |
-| 56 | i64.gt_u | no | no | no | yes | NOT_IN_ENUM |
-| 57 | i64.le_s | no | no | no | no | NOT_IN_ENUM |
-| 58 | i64.le_u | no | no | no | no | NOT_IN_ENUM |
-| 59 | i64.ge_s | no | no | no | no | NOT_IN_ENUM |
-| 5a | i64.ge_u | no | no | no | yes | NOT_IN_ENUM |
+| 50 | i64.eqz | yes | yes | yes | yes | OK |
+| 51 | i64.eq | yes | yes | yes | yes | OK |
+| 52 | i64.ne | yes | yes | yes | yes | OK |
+| 53 | i64.lt_s | yes | yes | yes | yes | OK |
+| 54 | i64.lt_u | yes | yes | yes | yes | OK |
+| 55 | i64.gt_s | yes | yes | yes | yes | OK |
+| 56 | i64.gt_u | yes | yes | yes | yes | OK |
+| 57 | i64.le_s | yes | yes | yes | yes | OK |
+| 58 | i64.le_u | yes | yes | yes | yes | OK |
+| 59 | i64.ge_s | yes | yes | yes | yes | OK |
+| 5a | i64.ge_u | yes | yes | yes | yes | OK |
 | 5b | f32.eq | yes | yes | yes | yes | OK |
 | 5c | f32.ne | yes | yes | yes | yes | OK |
 | 5d | f32.lt | yes | yes | yes | yes | OK |
@@ -115,9 +115,9 @@ The VM `wasm_vm_step` switch `default:` returns
 | 64 | f64.gt | yes | yes | yes | no | UNTESTED |
 | 65 | f64.le | yes | yes | yes | no | UNTESTED |
 | 66 | f64.ge | yes | yes | yes | yes | OK |
-| 67 | i32.clz | no | no | no | no | NOT_IN_ENUM |
-| 68 | i32.ctz | no | no | no | no | NOT_IN_ENUM |
-| 69 | i32.popcnt | no | no | no | yes | NOT_IN_ENUM |
+| 67 | i32.clz | yes | yes | yes | yes | OK |
+| 68 | i32.ctz | yes | yes | yes | yes | OK |
+| 69 | i32.popcnt | yes | yes | yes | yes | OK |
 | 6a | i32.add | yes | yes | yes | yes | OK |
 | 6b | i32.sub | yes | yes | yes | yes | OK |
 | 6c | i32.mul | yes | yes | yes | yes | OK |
@@ -131,11 +131,11 @@ The VM `wasm_vm_step` switch `default:` returns
 | 74 | i32.shl | yes | yes | yes | yes | OK |
 | 75 | i32.shr_s | yes | yes | yes | yes | OK |
 | 76 | i32.shr_u | yes | yes | yes | yes | OK |
-| 77 | i32.rotl | no | no | no | no | NOT_IN_ENUM |
-| 78 | i32.rotr | no | no | no | no | NOT_IN_ENUM |
-| 79 | i64.clz | no | no | no | no | NOT_IN_ENUM |
-| 7a | i64.ctz | no | no | no | no | NOT_IN_ENUM |
-| 7b | i64.popcnt | no | no | no | yes | NOT_IN_ENUM |
+| 77 | i32.rotl | yes | yes | yes | yes | OK |
+| 78 | i32.rotr | yes | yes | yes | yes | OK |
+| 79 | i64.clz | yes | yes | yes | yes | OK |
+| 7a | i64.ctz | yes | yes | yes | yes | OK |
+| 7b | i64.popcnt | yes | yes | yes | yes | OK |
 | 7c | i64.add | yes | yes | yes | yes | OK |
 | 7d | i64.sub | yes | yes | yes | yes | OK |
 | 7e | i64.mul | yes | yes | yes | yes | OK |
@@ -149,8 +149,8 @@ The VM `wasm_vm_step` switch `default:` returns
 | 86 | i64.shl | yes | yes | yes | no | UNTESTED |
 | 87 | i64.shr_s | yes | yes | yes | no | UNTESTED |
 | 88 | i64.shr_u | yes | yes | yes | no | UNTESTED |
-| 89 | i64.rotl | no | no | no | no | NOT_IN_ENUM |
-| 8a | i64.rotr | no | no | no | no | NOT_IN_ENUM |
+| 89 | i64.rotl | yes | yes | yes | yes | OK |
+| 8a | i64.rotr | yes | yes | yes | yes | OK |
 | 8b | f32.abs | yes | yes | yes | yes | OK |
 | 8c | f32.neg | yes | yes | yes | yes | OK |
 | 8d | f32.ceil | yes | yes | yes | yes | OK |
@@ -179,13 +179,13 @@ The VM `wasm_vm_step` switch `default:` returns
 | a4 | f64.min | yes | yes | yes | yes | OK |
 | a5 | f64.max | yes | yes | yes | yes | OK |
 | a6 | f64.copysign | yes | yes | yes | yes | OK |
-| a7 | i32.wrap_i64 | no | no | no | no | NOT_IN_ENUM |
+| a7 | i32.wrap_i64 | yes | yes | yes | yes | OK |
 | a8 | i32.trunc_f32_s | yes | yes | yes | yes | OK |
 | a9 | i32.trunc_f32_u | yes | yes | yes | yes | OK |
 | aa | i32.trunc_f64_s | yes | yes | yes | yes | OK |
 | ab | i32.trunc_f64_u | yes | yes | yes | yes | OK |
-| ac | i64.extend_i32_s | no | no | no | yes | NOT_IN_ENUM |
-| ad | i64.extend_i32_u | no | no | no | no | NOT_IN_ENUM |
+| ac | i64.extend_i32_s | yes | yes | yes | yes | OK |
+| ad | i64.extend_i32_u | yes | yes | yes | yes | OK |
 | ae | i64.trunc_f32_s | yes | yes | yes | yes | OK |
 | af | i64.trunc_f32_u | yes | yes | yes | yes | OK |
 | b0 | i64.trunc_f64_s | yes | yes | yes | yes | OK |
