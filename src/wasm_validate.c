@@ -862,6 +862,121 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
             }
             break;
         }
+        case 0x29u:
+        case 0x2Cu:
+        case 0x2Du:
+        case 0x2Eu:
+        case 0x2Fu:
+        case 0x30u:
+        case 0x31u:
+        case 0x32u:
+        case 0x33u:
+        case 0x34u:
+        case 0x35u: {
+            /* i64 and sub-word loads: memarg align/offset, then
+             * [i32] -> [i64 or i32]. Access sizes: 8 / 1 / 2 / 4. */
+            uint32_t access;
+            uint8_t vt;
+            if (op == 0x29u) {
+                access = 8u;
+                vt = (uint8_t)WASM_TYPE_I64;
+            } else if (op == 0x2Cu || op == 0x2Du || op == 0x30u ||
+                       op == 0x31u) {
+                access = 1u;
+                vt = (op == 0x2Cu || op == 0x2Du)
+                         ? (uint8_t)WASM_TYPE_I32
+                         : (uint8_t)WASM_TYPE_I64;
+            } else if (op == 0x2Eu || op == 0x2Fu || op == 0x32u ||
+                       op == 0x33u) {
+                access = 2u;
+                vt = (op == 0x2Eu || op == 0x2Fu)
+                         ? (uint8_t)WASM_TYPE_I32
+                         : (uint8_t)WASM_TYPE_I64;
+            } else {
+                access = 4u;
+                vt = (uint8_t)WASM_TYPE_I64;
+            }
+            rc = vmemarg(&p, body_end, access);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpop_expect(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpush(v, vt);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
+        }
+        case 0x37u:
+        case 0x3Au:
+        case 0x3Bu:
+        case 0x3Cu:
+        case 0x3Du:
+        case 0x3Eu: {
+            /* i64 and sub-word stores: [i32 base, value] -> [].
+             * Value type is i64 except 0x3A/0x3B (i32). */
+            uint32_t access;
+            uint8_t vt;
+            if (op == 0x37u) {
+                access = 8u;
+                vt = (uint8_t)WASM_TYPE_I64;
+            } else if (op == 0x3Au) {
+                access = 1u;
+                vt = (uint8_t)WASM_TYPE_I32;
+            } else if (op == 0x3Bu) {
+                access = 2u;
+                vt = (uint8_t)WASM_TYPE_I32;
+            } else if (op == 0x3Cu) {
+                access = 1u;
+                vt = (uint8_t)WASM_TYPE_I64;
+            } else if (op == 0x3Du) {
+                access = 2u;
+                vt = (uint8_t)WASM_TYPE_I64;
+            } else {
+                access = 4u;
+                vt = (uint8_t)WASM_TYPE_I64;
+            }
+            rc = vmemarg(&p, body_end, access);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpop_expect(v, vt);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            rc = vpop_expect(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
+        }
+        case 0x3Fu:
+        case 0x40u: {
+            /* memory.size / memory.grow: one reserved 0x00 byte.
+             * size is [] -> [i32]; grow is [i32] -> [i32]. */
+            uint8_t flag;
+            if (!vreadable(p, body_end, 1u)) {
+                return WASM_ERR_TRUNCATED;
+            }
+            flag = *p++;
+            if (flag != 0x00u) {
+                return WASM_ERR_INVALID_SECTION;
+            }
+            if (op == 0x40u) {
+                rc = vpop_expect(v, (uint8_t)WASM_TYPE_I32);
+                if (rc != WASM_OK) {
+                    return rc;
+                }
+            }
+            rc = vpush(v, (uint8_t)WASM_TYPE_I32);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            break;
+        }
         case 0x41u:
         case 0x42u:
         case 0x43u:

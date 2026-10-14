@@ -695,6 +695,57 @@ static wasm_trap_t vm_skip_s64(const uint8_t **pp, const uint8_t *end)
     return WASM_TRAP_OK;
 }
 
+/* Decode a load/store memarg (align + offset immediates); align is a
+ * performance hint only and never affects correctness. */
+static wasm_trap_t vm_decode_memarg(wasm_frame_t *f, uint32_t *out_offset)
+{
+    uint32_t align = 0u;
+    wasm_trap_t tr = vm_decode_u32_imm(f, &align);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    (void)align;
+    return vm_decode_u32_imm(f, out_offset);
+}
+
+/* Pop the i32 base and resolve base+offset with a wraparound guard;
+ * unbound memory reports OUT_OF_BOUNDS like the other memory faults. */
+static wasm_trap_t vm_resolve_ea(wasm_vm_t *vm, uint32_t offset,
+                                 uint32_t *out_ea)
+{
+    wasm_val_t vb;
+    uint64_t ea64;
+    wasm_trap_t tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &vb);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    ea64 = (uint64_t)(uint32_t)vb.value.i32 + (uint64_t)offset;
+    if (ea64 > (uint64_t)0xFFFFFFFFu) {
+        return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+    }
+    if (vm->mem == NULL) {
+        return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+    }
+    *out_ea = (uint32_t)ea64;
+    return WASM_TRAP_OK;
+}
+
+/* Resolve base+offset for a store whose value slot is already popped:
+ * same wraparound and unbound-memory faults, no stack traffic. */
+static wasm_trap_t vm_store_ea(wasm_vm_t *vm, int32_t base, uint32_t offset,
+                               uint32_t *out_ea)
+{
+    uint64_t ea64 = (uint64_t)(uint32_t)base + (uint64_t)offset;
+    if (ea64 > (uint64_t)0xFFFFFFFFu) {
+        return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+    }
+    if (vm->mem == NULL) {
+        return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+    }
+    *out_ea = (uint32_t)ea64;
+    return WASM_TRAP_OK;
+}
+
 /*
  * Forward scan from `from` for the END closing `levels` enclosing blocks.
  * Opens nest deeper; an END met at level 0 closes one enclosing block.
@@ -822,6 +873,23 @@ static wasm_trap_t vm_scan_block(const uint8_t *from, const uint8_t *end,
         case OP_F32_STORE:
         case OP_F64_LOAD:
         case OP_F64_STORE:
+        case OP_I64_LOAD:
+        case OP_I32_LOAD8_S:
+        case OP_I32_LOAD8_U:
+        case OP_I32_LOAD16_S:
+        case OP_I32_LOAD16_U:
+        case OP_I64_LOAD8_S:
+        case OP_I64_LOAD8_U:
+        case OP_I64_LOAD16_S:
+        case OP_I64_LOAD16_U:
+        case OP_I64_LOAD32_S:
+        case OP_I64_LOAD32_U:
+        case OP_I64_STORE:
+        case OP_I32_STORE8:
+        case OP_I32_STORE16:
+        case OP_I64_STORE8:
+        case OP_I64_STORE16:
+        case OP_I64_STORE32:
             tr = vm_skip_u32(&p, end);
             if (tr != WASM_TRAP_OK) {
                 return tr;
@@ -830,6 +898,14 @@ static wasm_trap_t vm_scan_block(const uint8_t *from, const uint8_t *end,
             if (tr != WASM_TRAP_OK) {
                 return tr;
             }
+            break;
+        case OP_MEMORY_SIZE:
+        case OP_MEMORY_GROW:
+            /* One reserved 0x00 byte (value checked at execution time). */
+            if (p >= end) {
+                return WASM_TRAP_CODE_OVERRUN;
+            }
+            p++;
             break;
         case OP_UNREACHABLE:
         case OP_NOP:
@@ -2457,6 +2533,275 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
             return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
         }
         return wasm_memory_store_f64(vm->mem, (uint32_t)ea64, vv.value.f64);
+    }
+
+    case OP_I64_LOAD: {
+        uint32_t offset = 0u, ea = 0u;
+        int64_t v = 0;
+        tr = vm_decode_memarg(f, &offset);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = vm_resolve_ea(vm, offset, &ea);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_memory_load_i64(vm->mem, ea, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_i64(vm, v);
+    }
+
+    case OP_I32_LOAD8_S:
+    case OP_I32_LOAD8_U: {
+        uint32_t offset = 0u, ea = 0u;
+        uint8_t b = 0u;
+        tr = vm_decode_memarg(f, &offset);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = vm_resolve_ea(vm, offset, &ea);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_memory_load_u8(vm->mem, ea, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (op == OP_I32_LOAD8_S && (b & 0x80u) != 0u) {
+            return vm_push_i32(vm, vm_u2s((uint32_t)b | 0xFFFFFF00u));
+        }
+        return vm_push_i32(vm, vm_u2s((uint32_t)b));
+    }
+
+    case OP_I32_LOAD16_S:
+    case OP_I32_LOAD16_U: {
+        uint32_t offset = 0u, ea = 0u;
+        uint16_t u = 0u;
+        tr = vm_decode_memarg(f, &offset);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = vm_resolve_ea(vm, offset, &ea);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_memory_load_u16(vm->mem, ea, &u);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (op == OP_I32_LOAD16_S && (u & 0x8000u) != 0u) {
+            return vm_push_i32(vm, vm_u2s((uint32_t)u | 0xFFFF0000u));
+        }
+        return vm_push_i32(vm, vm_u2s((uint32_t)u));
+    }
+
+    case OP_I64_LOAD8_S:
+    case OP_I64_LOAD8_U: {
+        uint32_t offset = 0u, ea = 0u;
+        uint8_t b = 0u;
+        tr = vm_decode_memarg(f, &offset);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = vm_resolve_ea(vm, offset, &ea);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_memory_load_u8(vm->mem, ea, &b);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (op == OP_I64_LOAD8_S && (b & 0x80u) != 0u) {
+            return vm_push_i64(vm, vm_u2s64((uint64_t)b | 0xFFFFFFFFFFFFFF00uLL));
+        }
+        return vm_push_i64(vm, (int64_t)b);
+    }
+
+    case OP_I64_LOAD16_S:
+    case OP_I64_LOAD16_U: {
+        uint32_t offset = 0u, ea = 0u;
+        uint16_t u = 0u;
+        tr = vm_decode_memarg(f, &offset);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = vm_resolve_ea(vm, offset, &ea);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_memory_load_u16(vm->mem, ea, &u);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (op == OP_I64_LOAD16_S && (u & 0x8000u) != 0u) {
+            return vm_push_i64(vm, vm_u2s64((uint64_t)u | 0xFFFFFFFFFFFF0000uLL));
+        }
+        return vm_push_i64(vm, (int64_t)u);
+    }
+
+    case OP_I64_LOAD32_S:
+    case OP_I64_LOAD32_U: {
+        uint32_t offset = 0u, ea = 0u;
+        int32_t v = 0;
+        uint32_t w = 0u;
+        tr = vm_decode_memarg(f, &offset);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = vm_resolve_ea(vm, offset, &ea);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_memory_load_i32(vm->mem, ea, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        memcpy(&w, &v, sizeof(w));
+        if (op == OP_I64_LOAD32_S && (w & 0x80000000u) != 0u) {
+            return vm_push_i64(vm, vm_u2s64((uint64_t)w | 0xFFFFFFFF00000000uLL));
+        }
+        return vm_push_i64(vm, (int64_t)w);
+    }
+
+    case OP_I64_STORE: {
+        uint32_t offset = 0u, ea = 0u;
+        wasm_val_t vv;
+        wasm_val_t vb;
+        tr = vm_decode_memarg(f, &offset);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        /* Stack order: [base, value]; value is on top. */
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I64, &vv);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &vb);
+        if (tr != WASM_TRAP_OK) {
+            (void)wasm_stack_push(&vm->operands, vv);
+            return tr;
+        }
+        tr = vm_store_ea(vm, vb.value.i32, offset, &ea);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return wasm_memory_store_i64(vm->mem, ea, vv.value.i64);
+    }
+
+    case OP_I32_STORE8:
+    case OP_I32_STORE16: {
+        uint32_t offset = 0u, ea = 0u;
+        wasm_val_t vv;
+        wasm_val_t vb;
+        tr = vm_decode_memarg(f, &offset);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &vv);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &vb);
+        if (tr != WASM_TRAP_OK) {
+            (void)wasm_stack_push(&vm->operands, vv);
+            return tr;
+        }
+        tr = vm_store_ea(vm, vb.value.i32, offset, &ea);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (op == OP_I32_STORE8) {
+            return wasm_memory_store_u8(vm->mem, ea,
+                                        (uint8_t)((uint32_t)vv.value.i32 & 0xFFu));
+        }
+        return wasm_memory_store_u16(vm->mem, ea,
+                                     (uint16_t)((uint32_t)vv.value.i32 & 0xFFFFu));
+    }
+
+    case OP_I64_STORE8:
+    case OP_I64_STORE16:
+    case OP_I64_STORE32: {
+        uint32_t offset = 0u, ea = 0u;
+        wasm_val_t vv;
+        wasm_val_t vb;
+        uint64_t w = 0u;
+        tr = vm_decode_memarg(f, &offset);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I64, &vv);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &vb);
+        if (tr != WASM_TRAP_OK) {
+            (void)wasm_stack_push(&vm->operands, vv);
+            return tr;
+        }
+        tr = vm_store_ea(vm, vb.value.i32, offset, &ea);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        memcpy(&w, &vv.value.i64, sizeof(w));
+        if (op == OP_I64_STORE8) {
+            return wasm_memory_store_u8(vm->mem, ea, (uint8_t)(w & 0xFFu));
+        }
+        if (op == OP_I64_STORE16) {
+            return wasm_memory_store_u16(vm->mem, ea, (uint16_t)(w & 0xFFFFu));
+        }
+        {
+            int32_t lo = 0;
+            uint32_t uw = (uint32_t)(w & 0xFFFFFFFFu);
+            memcpy(&lo, &uw, sizeof(lo));
+            return wasm_memory_store_i32(vm->mem, ea, lo);
+        }
+    }
+
+    case OP_MEMORY_SIZE: {
+        /* Reserved 0x00 byte, then push the current page count (0 when
+         * no memory is bound). Never traps on the memory itself. */
+        if (f->code_ptr == NULL || f->code_end == NULL ||
+            f->code_ptr >= f->code_end) {
+            return WASM_TRAP_CODE_OVERRUN;
+        }
+        if (*f->code_ptr++ != 0x00u) {
+            return WASM_TRAP_INVALID_ARGUMENT;
+        }
+        if (vm->mem == NULL) {
+            return vm_push_i32(vm, 0);
+        }
+        return vm_push_i32(vm, vm_u2s(wasm_memory_pages(vm->mem)));
+    }
+
+    case OP_MEMORY_GROW: {
+        /* Reserved 0x00 byte, then grow by the i32 page delta. Failure
+         * (including unbound memory) pushes -1, never traps. */
+        wasm_val_t vd;
+        uint32_t prev = 0u;
+        if (f->code_ptr == NULL || f->code_end == NULL ||
+            f->code_ptr >= f->code_end) {
+            return WASM_TRAP_CODE_OVERRUN;
+        }
+        if (*f->code_ptr++ != 0x00u) {
+            return WASM_TRAP_INVALID_ARGUMENT;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &vd);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        if (vm->mem == NULL) {
+            return vm_push_i32(vm, -1);
+        }
+        tr = wasm_mem_grow(vm->mem, (uint32_t)vd.value.i32, &prev);
+        if (tr == WASM_TRAP_MEMORY_GROW_FAILED) {
+            return vm_push_i32(vm, -1);
+        }
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_i32(vm, vm_u2s(prev));
     }
 
     default:

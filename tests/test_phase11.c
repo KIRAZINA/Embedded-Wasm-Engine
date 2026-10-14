@@ -170,6 +170,140 @@ static void test_corpus(void)
     }
 
     {
+        static const uint8_t i64_load[] = {
+            0x41u, 0x00u, 0x29u, 0x03u, 0x00u, 0x0Bu
+        };
+        static const uint8_t load8s[] = {
+            0x41u, 0x00u, 0x2Cu, 0x00u, 0x00u, 0x0Bu
+        };
+        static const uint8_t load8u[] = {
+            0x41u, 0x00u, 0x2Du, 0x00u, 0x00u, 0x0Bu
+        };
+        static const uint8_t load16s[] = {
+            0x41u, 0x00u, 0x2Eu, 0x01u, 0x00u, 0x0Bu
+        };
+        static const uint8_t load16u[] = {
+            0x41u, 0x00u, 0x2Fu, 0x01u, 0x00u, 0x0Bu
+        };
+        static const uint8_t i64_load8s[] = {
+            0x41u, 0x00u, 0x30u, 0x00u, 0x00u, 0x0Bu
+        };
+        static const uint8_t i64_load8u[] = {
+            0x41u, 0x00u, 0x31u, 0x00u, 0x00u, 0x0Bu
+        };
+        static const uint8_t i64_load16s[] = {
+            0x41u, 0x00u, 0x32u, 0x01u, 0x00u, 0x0Bu
+        };
+        static const uint8_t i64_load16u[] = {
+            0x41u, 0x00u, 0x33u, 0x01u, 0x00u, 0x0Bu
+        };
+        static const uint8_t i64_load32s[] = {
+            0x41u, 0x00u, 0x34u, 0x02u, 0x00u, 0x0Bu
+        };
+        static const uint8_t i64_load32u[] = {
+            0x41u, 0x00u, 0x35u, 0x02u, 0x00u, 0x0Bu
+        };
+        static const uint8_t i64_store[] = {
+            0x41u, 0x00u, 0x42u, 0x00u, 0x37u, 0x03u, 0x00u, 0x0Bu
+        };
+        static const uint8_t store8[] = {
+            0x41u, 0x00u, 0x41u, 0x01u, 0x3Au, 0x00u, 0x00u, 0x0Bu
+        };
+        static const uint8_t store16[] = {
+            0x41u, 0x00u, 0x41u, 0x01u, 0x3Bu, 0x01u, 0x00u, 0x0Bu
+        };
+        static const uint8_t i64_store8[] = {
+            0x41u, 0x00u, 0x42u, 0x01u, 0x3Cu, 0x00u, 0x00u, 0x0Bu
+        };
+        static const uint8_t i64_store16[] = {
+            0x41u, 0x00u, 0x42u, 0x01u, 0x3Du, 0x01u, 0x00u, 0x0Bu
+        };
+        static const uint8_t i64_store32[] = {
+            0x41u, 0x00u, 0x42u, 0x01u, 0x3Eu, 0x02u, 0x00u, 0x0Bu
+        };
+        static const uint8_t mem_size[] = { 0x3Fu, 0x00u, 0x0Bu };
+        static const uint8_t mem_grow[] = {
+            0x41u, 0x00u, 0x40u, 0x00u, 0x0Bu
+        };
+        static const uint8_t load16_bad_align[] = {
+            0x41u, 0x00u, 0x2Eu, 0x02u, 0x00u, 0x0Bu
+        };
+        static const uint8_t store8_bad_align[] = {
+            0x41u, 0x00u, 0x41u, 0x01u, 0x3Au, 0x01u, 0x00u, 0x0Bu
+        };
+        static const uint8_t load32_bad_align[] = {
+            0x41u, 0x00u, 0x35u, 0x03u, 0x00u, 0x0Bu
+        };
+        static const uint8_t i64_load_bad_base[] = {
+            0x42u, 0x00u, 0x29u, 0x03u, 0x00u, 0x0Bu
+        };
+        static const uint8_t i64_store16_bad_value[] = {
+            0x41u, 0x00u, 0x41u, 0x01u, 0x3Du, 0x01u, 0x00u, 0x0Bu
+        };
+        static const uint8_t size_bad_reserved[] = { 0x3Fu, 0x01u, 0x0Bu };
+        static const uint8_t size_no_reserved[] = { 0x3Fu };
+        static const uint8_t grow_bad_reserved[] = {
+            0x41u, 0x00u, 0x40u, 0x02u, 0x0Bu
+        };
+        static const uint8_t grow_bad_delta[] = {
+            0x42u, 0x00u, 0x40u, 0x00u, 0x0Bu
+        };
+        check_result_body(0x7Eu, i64_load, sizeof(i64_load), WASM_OK,
+                          "i64.load accepted");
+        check_result_body(0x7Fu, load8s, sizeof(load8s), WASM_OK,
+                          "i32.load8_s accepted");
+        check_result_body(0x7Fu, load8u, sizeof(load8u), WASM_OK,
+                          "i32.load8_u accepted");
+        check_result_body(0x7Fu, load16s, sizeof(load16s), WASM_OK,
+                          "i32.load16_s accepted");
+        check_result_body(0x7Fu, load16u, sizeof(load16u), WASM_OK,
+                          "i32.load16_u accepted");
+        check_result_body(0x7Eu, i64_load8s, sizeof(i64_load8s), WASM_OK,
+                          "i64.load8_s accepted");
+        check_result_body(0x7Eu, i64_load8u, sizeof(i64_load8u), WASM_OK,
+                          "i64.load8_u accepted");
+        check_result_body(0x7Eu, i64_load16s, sizeof(i64_load16s), WASM_OK,
+                          "i64.load16_s accepted");
+        check_result_body(0x7Eu, i64_load16u, sizeof(i64_load16u), WASM_OK,
+                          "i64.load16_u accepted");
+        check_result_body(0x7Eu, i64_load32s, sizeof(i64_load32s), WASM_OK,
+                          "i64.load32_s accepted");
+        check_result_body(0x7Eu, i64_load32u, sizeof(i64_load32u), WASM_OK,
+                          "i64.load32_u accepted");
+        check_body(i64_store, sizeof(i64_store), WASM_OK, "i64.store accepted");
+        check_body(store8, sizeof(store8), WASM_OK, "i32.store8 accepted");
+        check_body(store16, sizeof(store16), WASM_OK, "i32.store16 accepted");
+        check_body(i64_store8, sizeof(i64_store8), WASM_OK,
+                   "i64.store8 accepted");
+        check_body(i64_store16, sizeof(i64_store16), WASM_OK,
+                   "i64.store16 accepted");
+        check_body(i64_store32, sizeof(i64_store32), WASM_OK,
+                   "i64.store32 accepted");
+        check_result_body(0x7Fu, mem_size, sizeof(mem_size), WASM_OK,
+                          "memory.size accepted");
+        check_result_body(0x7Fu, mem_grow, sizeof(mem_grow), WASM_OK,
+                          "memory.grow accepted");
+        check_body(load16_bad_align, sizeof(load16_bad_align),
+                   WASM_ERR_INVALID_ALIGN, "load16 align 2 rejected");
+        check_body(store8_bad_align, sizeof(store8_bad_align),
+                   WASM_ERR_INVALID_ALIGN, "store8 align 1 rejected");
+        check_body(load32_bad_align, sizeof(load32_bad_align),
+                   WASM_ERR_INVALID_ALIGN, "load32 align 3 rejected");
+        check_body(i64_load_bad_base, sizeof(i64_load_bad_base),
+                   WASM_ERR_INVALID_TYPE, "i64.load i64 base rejected");
+        check_body(i64_store16_bad_value, sizeof(i64_store16_bad_value),
+                   WASM_ERR_INVALID_TYPE, "i64.store16 i32 value rejected");
+        check_body(size_bad_reserved, sizeof(size_bad_reserved),
+                   WASM_ERR_INVALID_SECTION, "size reserved 0x01 rejected");
+        check_body(size_no_reserved, sizeof(size_no_reserved),
+                   WASM_ERR_TRUNCATED, "size missing reserved truncated");
+        check_body(grow_bad_reserved, sizeof(grow_bad_reserved),
+                   WASM_ERR_INVALID_SECTION, "grow reserved 0x02 rejected");
+        check_body(grow_bad_delta, sizeof(grow_bad_delta),
+                   WASM_ERR_INVALID_TYPE, "grow i64 delta rejected");
+    }
+
+    {
         static const uint8_t sel_i32[] = {
             0x41u, 0x0Au, 0x41u, 0x14u, 0x41u, 0x01u, 0x1Bu, 0x0Bu
         };
