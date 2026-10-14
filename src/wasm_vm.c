@@ -423,6 +423,16 @@ static double vm_f64_canon_nan(void)
     return vm_bits_f64((uint64_t)VM_F64_CANON_NAN_BITS);
 }
 
+static float vm_f32_arith_res(float v)
+{
+    return isnan(v) ? vm_f32_canon_nan() : v;
+}
+
+static double vm_f64_arith_res(double v)
+{
+    return isnan(v) ? vm_f64_canon_nan() : v;
+}
+
 /* ================= WASM min/max (S2) =================
  * Hand-rolled: C fminf/fmaxf have the wrong NaN and signed-zero behavior.
  * NaN in either operand -> canonical quiet NaN; min(+0,-0) = -0 (and the
@@ -1960,15 +1970,15 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
             return tr;
         }
         if (op == OP_F32_ADD) {
-            return vm_push_f32(vm, a + b);
+            return vm_push_f32(vm, vm_f32_arith_res(a + b));
         }
         if (op == OP_F32_SUB) {
-            return vm_push_f32(vm, a - b);
+            return vm_push_f32(vm, vm_f32_arith_res(a - b));
         }
         if (op == OP_F32_MUL) {
-            return vm_push_f32(vm, a * b);
+            return vm_push_f32(vm, vm_f32_arith_res(a * b));
         }
-        return vm_push_f32(vm, a / b);
+        return vm_push_f32(vm, vm_f32_arith_res(a / b));
     }
 
     case OP_F64_ADD:
@@ -1981,15 +1991,15 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
             return tr;
         }
         if (op == OP_F64_ADD) {
-            return vm_push_f64(vm, a + b);
+            return vm_push_f64(vm, vm_f64_arith_res(a + b));
         }
         if (op == OP_F64_SUB) {
-            return vm_push_f64(vm, a - b);
+            return vm_push_f64(vm, vm_f64_arith_res(a - b));
         }
         if (op == OP_F64_MUL) {
-            return vm_push_f64(vm, a * b);
+            return vm_push_f64(vm, vm_f64_arith_res(a * b));
         }
-        return vm_push_f64(vm, a / b);
+        return vm_push_f64(vm, vm_f64_arith_res(a / b));
     }
 
     case OP_F32_SQRT: {
@@ -1998,7 +2008,7 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
         if (tr != WASM_TRAP_OK) {
             return tr;
         }
-        return vm_push_f32(vm, sqrtf(v.value.f32)); /* S5: sqrt(neg) = NaN */
+        return vm_push_f32(vm, vm_f32_arith_res(sqrtf(v.value.f32))); /* S5: sqrt(neg) = NaN */
     }
 
     case OP_F64_SQRT: {
@@ -2007,7 +2017,7 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
         if (tr != WASM_TRAP_OK) {
             return tr;
         }
-        return vm_push_f64(vm, sqrt(v.value.f64)); /* S5: sqrt(neg) = NaN */
+        return vm_push_f64(vm, vm_f64_arith_res(sqrt(v.value.f64))); /* S5: sqrt(neg) = NaN */
     }
 
     case OP_F32_MIN:
@@ -2080,12 +2090,12 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
             return tr;
         }
         if (op == OP_F32_CEIL) {
-            return vm_push_f32(vm, ceilf(v.value.f32));
+            return vm_push_f32(vm, vm_f32_arith_res(ceilf(v.value.f32)));
         }
         if (op == OP_F32_FLOOR) {
-            return vm_push_f32(vm, floorf(v.value.f32));
+            return vm_push_f32(vm, vm_f32_arith_res(floorf(v.value.f32)));
         }
-        return vm_push_f32(vm, truncf(v.value.f32));
+        return vm_push_f32(vm, vm_f32_arith_res(truncf(v.value.f32)));
     }
 
     case OP_F64_CEIL:
@@ -2097,12 +2107,12 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
             return tr;
         }
         if (op == OP_F64_CEIL) {
-            return vm_push_f64(vm, ceil(v.value.f64));
+            return vm_push_f64(vm, vm_f64_arith_res(ceil(v.value.f64)));
         }
         if (op == OP_F64_FLOOR) {
-            return vm_push_f64(vm, floor(v.value.f64));
+            return vm_push_f64(vm, vm_f64_arith_res(floor(v.value.f64)));
         }
-        return vm_push_f64(vm, trunc(v.value.f64));
+        return vm_push_f64(vm, vm_f64_arith_res(trunc(v.value.f64)));
     }
 
     case OP_F32_NEAREST: {
@@ -2111,7 +2121,7 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
         if (tr != WASM_TRAP_OK) {
             return tr;
         }
-        return vm_push_f32(vm, vm_f32_nearest(v.value.f32));
+        return vm_push_f32(vm, vm_f32_arith_res(vm_f32_nearest(v.value.f32)));
     }
 
     case OP_F64_NEAREST: {
@@ -2120,7 +2130,7 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
         if (tr != WASM_TRAP_OK) {
             return tr;
         }
-        return vm_push_f64(vm, vm_f64_nearest(v.value.f64));
+        return vm_push_f64(vm, vm_f64_arith_res(vm_f64_nearest(v.value.f64)));
     }
 
     case OP_F32_COPYSIGN: {
