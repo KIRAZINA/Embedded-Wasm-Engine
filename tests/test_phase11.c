@@ -488,7 +488,7 @@ static void test_corpus(void)
         };
         static const uint8_t table_multi_ok[] = {
             0x02u, 0x40u, 0x41u, 0x00u, 0x0Eu, 0x01u, 0x00u, 0x00u,
-            0x00u, 0x0Bu
+            0x00u, 0x0Bu, 0x0Bu
         };
         check_body(table_label_oob, sizeof(table_label_oob),
                    WASM_ERR_INVALID_LABEL, "br_table label >= depth rejected");

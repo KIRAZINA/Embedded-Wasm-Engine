@@ -21,13 +21,10 @@
  *     INVALID_LOCAL  local index out of range
  *     INVALID_GLOBAL global index/mutability errors
  *     INVALID_ALIGN  alignment exceeds the access size
- * - Opcodes the interpreter cannot execute (nop, drop, i64 comparisons,
- *   sub-word/float memory ops, saturating conversions, ...) are rejected
- *   as INVALID_SECTION: undecodable into engine semantics.
  *
  * Engine-convention notes (validated to match execution, not bare spec):
- * - Function bodies WITHOUT a trailing 0x0B are accepted (implicit end);
- *   a trailing 0x0B closing an empty control stack is also accepted.
+ * - Function bodies MUST end with an explicit function-level 0x0B (MVP
+ *   strictness); falling off the code window is WASM_ERR_TRUNCATED.
  * - Block result types accept all four MVP valtypes (void counts as
  *   no result); arity is at most one (single result byte).
  * - Locals carry their declared types; global.get of an imported

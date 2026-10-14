@@ -545,7 +545,7 @@ static void test_cli_dump(void)
     out[n] = '\0';
     dump_contains(out, "00 61 73 6d", "magic bytes shown");
     dump_contains(out, "version: 1", "version shown");
-    dump_contains(out, "size: 41 bytes", "file size shown");
+    dump_contains(out, "size: 42 bytes", "file size shown");
     dump_contains(out, "name=Type", "type section row");
     dump_contains(out, "name=Function", "function section row");
     dump_contains(out, "name=Export", "export section row");
