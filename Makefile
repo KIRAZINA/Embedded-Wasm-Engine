@@ -22,9 +22,17 @@ endif
 RUNNER    = $(BUILD)/wasm_runner
 ifeq ($(OS),Windows_NT)
 PARITY_RUNNER = $(RUNNER).exe
+SPEC_RUNNER_BIN = $(BUILD)/wasm_runner_spec.exe
 else
 PARITY_RUNNER = $(RUNNER)
+SPEC_RUNNER_BIN = $(BUILD)/wasm_runner_spec
 endif
+# Spec-runner build: same sources, raised fixed caps for the official
+# suites (many small funcs per module; 1000-entry tables). Desktop/CI
+# only; the shipping build keeps embedded-sized defaults. Caps mirror
+# LIMITS.md -D overrides; the harness capacity flags must match these.
+SPEC_CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude \
+              -DWASM_MAX_FUNCTIONS=512 -DWASM_MAX_TABLE_SIZE=1024
 T1        = $(BUILD)/test_phase1
 T2        = $(BUILD)/test_phase2
 T3        = $(BUILD)/test_phase3
@@ -173,6 +181,13 @@ fuzz: $(FUZZ)
 parity: $(RUNNER)
 	$(PYTHON) tools/parity_check.py --runner $(PARITY_RUNNER)
 
+$(SPEC_RUNNER_BIN): $(SRC) src/main.c include/version.h
+	$(MKDIR_P)
+	$(CC) $(SPEC_CFLAGS) $(SRC) src/main.c -o $(SPEC_RUNNER_BIN) $(LDLIBS)
+
+spec: $(SPEC_RUNNER_BIN)
+	$(PYTHON) tools/run_spec_suite.py --runner $(SPEC_RUNNER_BIN) tests/spec/json/*.json
+
 size-report: tools/size_report.c
 	$(MKDIR_P)
 	$(CC) $(CFLAGS) tools/size_report.c -o $(BUILD)/size_report $(LDLIBS)
@@ -202,4 +217,4 @@ runner: $(RUNNER)
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 testcli runner fuzz parity size-report arm-cross sanitize clean
+.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 testcli runner fuzz parity spec size-report arm-cross sanitize clean

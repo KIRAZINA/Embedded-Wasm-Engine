@@ -38,6 +38,9 @@
 #ifndef RUNNER_STEP_BUDGET
 #define RUNNER_STEP_BUDGET 10000000u /* CLI execution watchdog steps */
 #endif
+#ifndef SESSION_ARENA_PAGES
+#define SESSION_ARENA_PAGES 64u /* pages reserved by --session arena */
+#endif
 
 static int g_quiet;
 static int g_result_line;
@@ -47,6 +50,16 @@ static uint8_t g_arena[RUNNER_ARENA_PAGES * WASM_PAGE_SIZE];
 static wasm_vm_t g_vm;
 static wasm_memory_t g_mem;
 static wasm_host_registry_t g_reg;
+
+/* --session state (independent of the one-shot path above). */
+static uint8_t s_file_buf[RUNNER_FILE_MAX];
+static uint8_t s_arena[SESSION_ARENA_PAGES * WASM_PAGE_SIZE];
+static wasm_vm_t s_vm;
+static wasm_memory_t s_mem;
+static wasm_host_registry_t s_reg;
+static wasm_module_t s_mod;
+static int s_have_mod = 0;
+static char s_line[2048];
 
 /* Native host callback visible to guests as env.print_i32(i32). */
 static wasm_trap_t host_print_i32(struct wasm_vm *vm,
@@ -70,6 +83,7 @@ static void usage(const char *prog)
 {
     fprintf(stderr, "usage: %s [--quiet] [--result-line] [--no-validate] <file.wasm> [export] [--arg TYPE:VALUE ...]\n", prog);
     fprintf(stderr, "       %s --dump <file.wasm>\n", prog);
+    fprintf(stderr, "       %s --session <cmdfile>\n", prog);
     fprintf(stderr, "       %s --version\n", prog);
     fprintf(stderr, "note: modules are statically validated before linking;\n");
     fprintf(stderr, "      --no-validate skips that check (runtime traps still apply).\n");
@@ -472,6 +486,357 @@ static int dump_module(const uint8_t *buf, size_t len, const wasm_module_t *mod)
     return 0;
 }
 
+/* ==================== --session batch mode ====================
+ *
+ * Machine protocol for the spec-suite harness (one reply line per command
+ * line, always; empty/blank lines reply SESSION_ERROR to keep pairing):
+ *   LOAD <path>                       -> LOADED <nfuncs> | LOAD_ERROR <ERR>
+ *   INVOKE <nargs> <TYPE:VALUE ...> <export>
+ *                                     -> RESULT ... | RESULT trap <NAME> |
+ *                                        EXHAUSTED | INVOKE_ERROR <ERR>
+ *   GET <export>                      -> RESULT ... | GET_ERROR <ERR>
+ * Anything else                       -> SESSION_ERROR <what>
+ *
+ * One instance lives at a time; LOAD replaces it (fresh VM, registry, and
+ * zeroed memory). Operand/call stacks reset before every INVOKE so a
+ * trapped call never pollutes the next one; globals, table, and memory
+ * persist across INVOKEs exactly like a live instance.
+ */
+
+static void session_load(const char *path)
+{
+    FILE *fp = NULL;
+    long fsize = 0L;
+    size_t nread = 0u;
+    wasm_module_t mod;
+    wasm_err_t ec;
+    wasm_trap_t tr;
+    uint32_t nfuncs = 0u;
+    uint32_t mem_min = 0u;
+    int mem_present = 0;
+    uint64_t need;
+
+    s_have_mod = 0; /* a failed LOAD leaves no usable instance behind */
+    fp = fopen(path, "rb");
+    if (fp == NULL) {
+        printf("LOAD_ERROR cannot-open\n");
+        return;
+    }
+    if (fseek(fp, 0L, SEEK_END) != 0 ||
+        (fsize = ftell(fp)) < 0L ||
+        fseek(fp, 0L, SEEK_SET) != 0) {
+        printf("LOAD_ERROR cannot-size\n");
+        fclose(fp);
+        return;
+    }
+    if (fsize == 0L || (uint64_t)fsize > (uint64_t)RUNNER_FILE_MAX) {
+        printf("LOAD_ERROR file-too-large\n");
+        fclose(fp);
+        return;
+    }
+    nread = fread(s_file_buf, 1u, (size_t)fsize, fp);
+    fclose(fp);
+    if (nread != (size_t)fsize) {
+        printf("LOAD_ERROR short-read\n");
+        return;
+    }
+    ec = wasm_parse_header(s_file_buf, nread, &mod);
+    if (ec != WASM_OK) {
+        printf("LOAD_ERROR %s\n", wasm_err_str(ec));
+        return;
+    }
+    s_mod = mod; /* borrowed pointers into s_file_buf (stable until LOAD) */
+    s_have_mod = 1;
+    ec = wasm_validate_module(&mod);
+    if (ec != WASM_OK) {
+        printf("LOAD_ERROR %s\n", wasm_err_str(ec));
+        return;
+    }
+    tr = wasm_host_registry_init(&s_reg);
+    if (tr != WASM_TRAP_OK) {
+        printf("LOAD_ERROR %s\n", wasm_trap_str(tr));
+        return;
+    }
+    tr = wasm_host_register_func(&s_reg, "env", "print_i32", 1u, 0u,
+                                 host_print_i32);
+    if (tr != WASM_TRAP_OK) {
+        printf("LOAD_ERROR %s\n", wasm_trap_str(tr));
+        return;
+    }
+    tr = wasm_vm_init(&s_vm);
+    if (tr != WASM_TRAP_OK) {
+        printf("LOAD_ERROR %s\n", wasm_trap_str(tr));
+        return;
+    }
+    ec = wasm_get_memory_min(&mod, &mem_min, &mem_present);
+    if (ec != WASM_OK) {
+        printf("LOAD_ERROR %s\n", wasm_err_str(ec));
+        return;
+    }
+    need = mem_present ? (uint64_t)mem_min * (uint64_t)WASM_PAGE_SIZE : 0u;
+    if (need > (uint64_t)sizeof(s_arena)) {
+        printf("LOAD_ERROR memory-too-large\n");
+        return;
+    }
+    tr = wasm_memory_init(&s_mem, s_arena, (uint32_t)sizeof(s_arena),
+                          mem_present ? mem_min : 0u,
+                          (uint32_t)SESSION_ARENA_PAGES);
+    if (tr != WASM_TRAP_OK) {
+        printf("LOAD_ERROR %s\n", wasm_trap_str(tr));
+        return;
+    }
+    tr = wasm_vm_bind_memory(&s_vm, &s_mem);
+    if (tr != WASM_TRAP_OK) {
+        printf("LOAD_ERROR %s\n", wasm_trap_str(tr));
+        return;
+    }
+    ec = wasm_instantiate(&s_vm, &mod, &s_reg, &nfuncs);
+    if (ec != WASM_OK) {
+        printf("LOAD_ERROR %s\n", wasm_err_str(ec));
+        return;
+    }
+    printf("LOADED %u\n", (unsigned)nfuncs);
+}
+
+static void session_invoke(const char *export_name, uint32_t nargs,
+                           const wasm_val_t *args)
+{
+    wasm_section_header_t exsec;
+    wasm_err_t ec;
+    wasm_trap_t tr;
+    uint32_t fidx = 0u, i;
+    uint32_t budget = RUNNER_STEP_BUDGET;
+    wasm_val_t res;
+    wasm_slice_t pay;
+
+    /* Fresh per-call stacks; instance state (globals/table/memory) stays. */
+    tr = wasm_stack_init(&s_vm.operands);
+    if (tr != WASM_TRAP_OK) {
+        printf("INVOKE_ERROR %s\n", wasm_trap_str(tr));
+        return;
+    }
+    tr = wasm_call_stack_init(&s_vm.calls);
+    if (tr != WASM_TRAP_OK) {
+        printf("INVOKE_ERROR %s\n", wasm_trap_str(tr));
+        return;
+    }
+    if (!s_have_mod) {
+        printf("INVOKE_ERROR no-module\n");
+        return;
+    }
+    ec = wasm_find_section(&s_mod, (uint8_t)WASM_SECT_EXPORT, &exsec);
+    if (ec != WASM_OK) {
+        printf("INVOKE_ERROR %s\n", wasm_err_str(ec));
+        return;
+    }
+    pay.data = exsec.payload.data;
+    pay.len = exsec.payload.len;
+    ec = wasm_get_export_func_index(&pay, export_name, &fidx);
+    if (ec != WASM_OK) {
+        printf("INVOKE_ERROR %s\n", wasm_err_str(ec));
+        return;
+    }
+    {
+        const wasm_func_desc_t *d = &s_vm.funcs[fidx];
+        if (nargs != d->param_count) {
+            printf("INVOKE_ERROR arg-count\n");
+            return;
+        }
+        if (d->is_host) {
+            wasm_val_t hrets[1];
+            hrets[0].type = WASM_TYPE_I32;
+            hrets[0].value.i32 = 0;
+            tr = d->host_cb(&s_vm, args, nargs, hrets, d->return_count);
+            if (tr != WASM_TRAP_OK) {
+                printf("RESULT trap %s\n", wasm_trap_str(tr));
+                return;
+            }
+            if (d->return_count > 0u) {
+                print_result_line(&hrets[0]);
+            } else {
+                print_result_line(NULL);
+            }
+            return;
+        }
+        for (i = 0u; i < nargs; i++) {
+            if (args[i].type != d->param_types[i]) {
+                printf("INVOKE_ERROR arg-type\n");
+                return;
+            }
+            tr = wasm_stack_push(&s_vm.operands, args[i]);
+            if (tr != WASM_TRAP_OK) {
+                printf("INVOKE_ERROR %s\n", wasm_trap_str(tr));
+                return;
+            }
+        }
+        tr = wasm_vm_enter_function(&s_vm, fidx, d->param_count,
+                                    d->local_count, d->return_count);
+        if (tr != WASM_TRAP_OK) {
+            printf("INVOKE_ERROR %s\n", wasm_trap_str(tr));
+            return;
+        }
+        tr = wasm_vm_attach_code(&s_vm, d->code, d->code_len);
+        if (tr != WASM_TRAP_OK) {
+            printf("INVOKE_ERROR %s\n", wasm_trap_str(tr));
+            return;
+        }
+        tr = WASM_TRAP_OK;
+        while (tr == WASM_TRAP_OK &&
+               wasm_call_stack_depth(&s_vm.calls) > 0u) {
+            wasm_frame_t *top = NULL;
+            tr = wasm_call_stack_top(&s_vm.calls, &top);
+            if (tr != WASM_TRAP_OK) {
+                break;
+            }
+            if (top->code_ptr == NULL || top->code_end == NULL ||
+                top->code_ptr >= top->code_end) {
+                tr = wasm_vm_exit_function(&s_vm, top->return_count);
+                continue;
+            }
+            if (budget == 0u) {
+                printf("EXHAUSTED\n");
+                return;
+            }
+            budget--;
+            tr = wasm_vm_step(&s_vm);
+        }
+        if (tr != WASM_TRAP_OK) {
+            printf("RESULT trap %s\n", wasm_trap_str(tr));
+            return;
+        }
+        if (d->return_count > 0u) {
+            tr = wasm_stack_pop(&s_vm.operands, &res);
+            if (tr != WASM_TRAP_OK) {
+                printf("INVOKE_ERROR %s\n", wasm_trap_str(tr));
+                return;
+            }
+            print_result_line(&res);
+        } else {
+            print_result_line(NULL);
+        }
+    }
+}
+
+static void session_get(const char *export_name)
+{
+    wasm_section_header_t exsec;
+    wasm_err_t ec;
+    uint32_t gidx = 0u;
+    wasm_slice_t pay;
+
+    if (!s_have_mod) {
+        printf("GET_ERROR no-module\n");
+        return;
+    }
+    ec = wasm_find_section(&s_mod, (uint8_t)WASM_SECT_EXPORT, &exsec);
+    if (ec != WASM_OK) {
+        printf("GET_ERROR %s\n", wasm_err_str(ec));
+        return;
+    }
+    pay.data = exsec.payload.data;
+    pay.len = exsec.payload.len;
+    ec = wasm_get_export_global_index(&pay, export_name, &gidx);
+    if (ec != WASM_OK) {
+        printf("GET_ERROR %s\n", wasm_err_str(ec));
+        return;
+    }
+    if (gidx >= (uint32_t)WASM_MAX_GLOBALS || !s_vm.globals[gidx].valid) {
+        printf("GET_ERROR bad-global\n");
+        return;
+    }
+    print_result_line(&s_vm.globals[gidx].value);
+}
+
+/* Split "INVOKE <nargs> <args...> <export>": fixed-count typed tokens first,
+ * the remainder of the line is the export name (may contain spaces). */
+static void session_invoke_line(char *rest)
+{
+    char *p = rest;
+    char *end = NULL;
+    unsigned long n;
+    uint32_t nargs, i;
+    wasm_val_t args[WASM_MAX_LOCALS_PER_FRAME];
+
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    n = strtoul(p, &end, 10);
+    if (end == p || n > (unsigned long)WASM_MAX_LOCALS_PER_FRAME) {
+        printf("SESSION_ERROR bad-invoke-arity\n");
+        return;
+    }
+    nargs = (uint32_t)n;
+    p = end;
+    for (i = 0u; i < nargs; i++) {
+        char *tok;
+        while (*p == ' ' || *p == '\t') {
+            p++;
+        }
+        if (*p == '\0') {
+            printf("SESSION_ERROR short-invoke-args\n");
+            return;
+        }
+        tok = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t') {
+            p++;
+        }
+        if (*p != '\0') {
+            *p++ = '\0';
+        }
+        if (!parse_typed_arg(tok, &args[i])) {
+            printf("SESSION_ERROR bad-invoke-arg\n");
+            return;
+        }
+    }
+    while (*p == ' ' || *p == '\t') {
+        p++;
+    }
+    if (*p == '\0') {
+        printf("SESSION_ERROR missing-export\n");
+        return;
+    }
+    session_invoke(p, nargs, args);
+}
+
+static int run_session(const char *cmdpath)
+{
+    FILE *fp = NULL;
+
+    fp = fopen(cmdpath, "r");
+    if (fp == NULL) {
+        fprintf(stderr, "error: cannot open session file '%s'\n", cmdpath);
+        return 2;
+    }
+    while (fgets(s_line, (int)sizeof(s_line), fp) != NULL) {
+        size_t len = strlen(s_line);
+        /* A full buffer with no newline means the line was truncated. */
+        if (len > 0u && s_line[len - 1u] != '\n' && !feof(fp)) {
+            int c;
+            printf("SESSION_ERROR line-too-long\n");
+            do {
+                c = fgetc(fp);
+            } while (c != '\n' && c != EOF);
+            continue;
+        }
+        while (len > 0u &&
+               (s_line[len - 1u] == '\n' || s_line[len - 1u] == '\r')) {
+            s_line[--len] = '\0';
+        }
+        if (strncmp(s_line, "LOAD ", 5u) == 0) {
+            session_load(s_line + 5);
+        } else if (strncmp(s_line, "GET ", 4u) == 0) {
+            session_get(s_line + 4);
+        } else if (strncmp(s_line, "INVOKE ", 7u) == 0) {
+            session_invoke_line(s_line + 7);
+        } else {
+            printf("SESSION_ERROR unknown-command\n");
+        }
+        fflush(stdout);
+    }
+    fclose(fp);
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     const char *path, *export_name = "main";
@@ -514,6 +879,13 @@ int main(int argc, char **argv)
         }
         if (strcmp(argv[argi], "--dump") == 0) {
             dump_mode = 1; argi++; break;
+        }
+        if (strcmp(argv[argi], "--session") == 0) {
+            if (argi + 1 >= argc) {
+                usage(argv[0]);
+                return 2;
+            }
+            return run_session(argv[argi + 1]);
         }
         break;
     }
