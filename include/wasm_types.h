@@ -310,7 +310,11 @@ typedef enum {
     OP_GLOBAL_GET  = 0x23,
     OP_GLOBAL_SET  = 0x24,
     OP_I32_LOAD    = 0x28,
+    OP_F32_LOAD    = 0x2A,
+    OP_F64_LOAD    = 0x2B,
     OP_I32_STORE   = 0x36,
+    OP_F32_STORE   = 0x38,
+    OP_F64_STORE   = 0x39,
     OP_I32_CONST   = 0x41,
     OP_I64_CONST   = 0x42,
     OP_F32_CONST   = 0x43, /* raw 4-byte LE immediate */

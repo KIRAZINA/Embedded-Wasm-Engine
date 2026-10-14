@@ -388,6 +388,27 @@ static wasm_err_t vimm_u32(const uint8_t **pp, const uint8_t *end,
     return WASM_OK;
 }
 
+/* Decode a load/store memarg (align + offset immediates) and check the
+ * alignment against the access size: 2^align must not exceed it. */
+static wasm_err_t vmemarg(const uint8_t **pp, const uint8_t *end,
+                          uint32_t access)
+{
+    uint32_t align = 0u, offset = 0u;
+    wasm_err_t rc = vimm_u32(pp, end, &align);
+    if (rc != WASM_OK) {
+        return rc;
+    }
+    rc = vimm_u32(pp, end, &offset);
+    if (rc != WASM_OK) {
+        return rc;
+    }
+    (void)offset; /* addressing is a runtime concern */
+    if (align > 31u || (1u << align) > access) {
+        return WASM_ERR_INVALID_ALIGN;
+    }
+    return WASM_OK;
+}
+
 /* Validate one function body. ptypes/npc/rtype/nrc describe it. */
 static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
                              const uint8_t *body_end, const uint8_t *ptypes,
@@ -807,6 +828,37 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
                 if (rc != WASM_OK) {
                     return rc;
                 }
+            }
+            break;
+        }
+        case 0x2Au:
+        case 0x2Bu:
+        case 0x38u:
+        case 0x39u: {
+            /* f32/f64 load/store: memarg align/offset, 4/8-byte access. */
+            uint32_t access = (op == 0x2Bu || op == 0x39u) ? 8u : 4u;
+            uint8_t vt = (op == 0x2Au || op == 0x38u)
+                             ? (uint8_t)WASM_TYPE_F32
+                             : (uint8_t)WASM_TYPE_F64;
+            rc = vmemarg(&p, body_end, access);
+            if (rc != WASM_OK) {
+                return rc;
+            }
+            if (op == 0x2Au || op == 0x2Bu) {
+                rc = vpop_expect(v, (uint8_t)WASM_TYPE_I32);
+                if (rc != WASM_OK) {
+                    return rc;
+                }
+                rc = vpush(v, vt);
+            } else {
+                rc = vpop_expect(v, vt);
+                if (rc != WASM_OK) {
+                    return rc;
+                }
+                rc = vpop_expect(v, (uint8_t)WASM_TYPE_I32);
+            }
+            if (rc != WASM_OK) {
+                return rc;
             }
             break;
         }

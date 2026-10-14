@@ -818,6 +818,10 @@ static wasm_trap_t vm_scan_block(const uint8_t *from, const uint8_t *end,
         }
         case OP_I32_LOAD:
         case OP_I32_STORE:
+        case OP_F32_LOAD:
+        case OP_F32_STORE:
+        case OP_F64_LOAD:
+        case OP_F64_STORE:
             tr = vm_skip_u32(&p, end);
             if (tr != WASM_TRAP_OK) {
                 return tr;
@@ -2321,6 +2325,138 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
             return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
         }
         return wasm_memory_store_i32(vm->mem, (uint32_t)ea64, vv.value.i32);
+    }
+
+    case OP_F32_LOAD: {
+        uint32_t align = 0u, offset = 0u;
+        wasm_val_t vb;
+        uint64_t ea64;
+        float v = 0.0f;
+        tr = vm_decode_u32_imm(f, &align);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        (void)align; /* hint only; correctness never depends on it */
+        tr = vm_decode_u32_imm(f, &offset);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &vb);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        ea64 = (uint64_t)(uint32_t)vb.value.i32 + (uint64_t)offset;
+        if (ea64 > (uint64_t)0xFFFFFFFFu) {
+            return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        }
+        if (vm->mem == NULL) {
+            return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        }
+        tr = wasm_memory_load_f32(vm->mem, (uint32_t)ea64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_f32(vm, v);
+    }
+
+    case OP_F64_LOAD: {
+        uint32_t align = 0u, offset = 0u;
+        wasm_val_t vb;
+        uint64_t ea64;
+        double v = 0.0;
+        tr = vm_decode_u32_imm(f, &align);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        (void)align; /* hint only; correctness never depends on it */
+        tr = vm_decode_u32_imm(f, &offset);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &vb);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        ea64 = (uint64_t)(uint32_t)vb.value.i32 + (uint64_t)offset;
+        if (ea64 > (uint64_t)0xFFFFFFFFu) {
+            return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        }
+        if (vm->mem == NULL) {
+            return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        }
+        tr = wasm_memory_load_f64(vm->mem, (uint32_t)ea64, &v);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        return vm_push_f64(vm, v);
+    }
+
+    case OP_F32_STORE: {
+        uint32_t align = 0u, offset = 0u;
+        wasm_val_t vv;
+        wasm_val_t vb;
+        uint64_t ea64;
+        tr = vm_decode_u32_imm(f, &align);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        (void)align;
+        tr = vm_decode_u32_imm(f, &offset);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        /* Stack order: [base, value]; value is on top. */
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F32, &vv);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &vb);
+        if (tr != WASM_TRAP_OK) {
+            (void)wasm_stack_push(&vm->operands, vv);
+            return tr;
+        }
+        ea64 = (uint64_t)(uint32_t)vb.value.i32 + (uint64_t)offset;
+        if (ea64 > (uint64_t)0xFFFFFFFFu) {
+            return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        }
+        if (vm->mem == NULL) {
+            return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        }
+        return wasm_memory_store_f32(vm->mem, (uint32_t)ea64, vv.value.f32);
+    }
+
+    case OP_F64_STORE: {
+        uint32_t align = 0u, offset = 0u;
+        wasm_val_t vv;
+        wasm_val_t vb;
+        uint64_t ea64;
+        tr = vm_decode_u32_imm(f, &align);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        (void)align;
+        tr = vm_decode_u32_imm(f, &offset);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        /* Stack order: [base, value]; value is on top. */
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_F64, &vv);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
+        tr = wasm_stack_pop_typed(&vm->operands, WASM_TYPE_I32, &vb);
+        if (tr != WASM_TRAP_OK) {
+            (void)wasm_stack_push(&vm->operands, vv);
+            return tr;
+        }
+        ea64 = (uint64_t)(uint32_t)vb.value.i32 + (uint64_t)offset;
+        if (ea64 > (uint64_t)0xFFFFFFFFu) {
+            return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        }
+        if (vm->mem == NULL) {
+            return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+        }
+        return wasm_memory_store_f64(vm->mem, (uint32_t)ea64, vv.value.f64);
     }
 
     default:
