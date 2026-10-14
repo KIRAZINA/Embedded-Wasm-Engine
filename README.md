@@ -70,6 +70,12 @@ anywhere**, verified by audit. All builds are warning-free under
   the host has no table concept, so a module importing a table cannot
   link. Only one defined table is supported, and only the first data /
   element section is applied if several are present.
+- Memory imports are rejected (`WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED`):
+  the host has no memory object to bind, so a module importing a memory
+  cannot link (accepting it would silently misdirect `memory.size`,
+  `memory.grow`, and data segments). Memory exports are accepted but
+  inert. At most one table and at most one memory; duplicates are
+  malformed, never silently shadowed.
 - Function bodies must end with an explicit function-level `end` (`0x0B`)
   byte (MVP strictness — there is no implicit-end deviation); bodies that
   fall off the code window are rejected as malformed. At runtime a

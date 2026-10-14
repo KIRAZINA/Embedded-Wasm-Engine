@@ -564,6 +564,57 @@ static void test_corpus(void)
     CHECK(validate_bytes(alignment_too_large, sizeof(alignment_too_large)) ==
           WASM_ERR_INVALID_ALIGN, "memory alignment too large");
 
+    {
+        /* Memory/table structure: imports rejected, duplicates rejected,
+         * memory exports inert-but-valid. Full modules below. */
+        static const uint8_t mem_import[] = {
+            0x00u, 0x61u, 0x73u, 0x6Du, 0x01u, 0x00u, 0x00u, 0x00u,
+            0x01u, 0x04u, 0x01u, 0x60u, 0x00u, 0x00u,
+            0x02u, 0x0Cu, 0x01u, 0x03u, 0x65u, 0x6Eu, 0x76u,
+            0x03u, 0x6Du, 0x65u, 0x6Du, 0x02u, 0x00u, 0x01u,
+            0x03u, 0x02u, 0x01u, 0x00u,
+            0x0Au, 0x04u, 0x01u, 0x02u, 0x00u, 0x0Bu
+        };
+        static const uint8_t two_memories[] = {
+            0x00u, 0x61u, 0x73u, 0x6Du, 0x01u, 0x00u, 0x00u, 0x00u,
+            0x05u, 0x05u, 0x02u, 0x00u, 0x01u, 0x00u, 0x01u
+        };
+        static const uint8_t dup_memory[] = {
+            0x00u, 0x61u, 0x73u, 0x6Du, 0x01u, 0x00u, 0x00u, 0x00u,
+            0x05u, 0x03u, 0x01u, 0x00u, 0x01u,
+            0x05u, 0x03u, 0x01u, 0x00u, 0x01u
+        };
+        static const uint8_t two_tables[] = {
+            0x00u, 0x61u, 0x73u, 0x6Du, 0x01u, 0x00u, 0x00u, 0x00u,
+            0x04u, 0x07u, 0x02u, 0x70u, 0x00u, 0x01u, 0x70u, 0x00u, 0x01u
+        };
+        static const uint8_t dup_table[] = {
+            0x00u, 0x61u, 0x73u, 0x6Du, 0x01u, 0x00u, 0x00u, 0x00u,
+            0x04u, 0x04u, 0x01u, 0x70u, 0x00u, 0x01u,
+            0x04u, 0x04u, 0x01u, 0x70u, 0x00u, 0x01u
+        };
+        static const uint8_t mem_export_ok[] = {
+            0x00u, 0x61u, 0x73u, 0x6Du, 0x01u, 0x00u, 0x00u, 0x00u,
+            0x01u, 0x04u, 0x01u, 0x60u, 0x00u, 0x00u,
+            0x03u, 0x02u, 0x01u, 0x00u,
+            0x05u, 0x03u, 0x01u, 0x00u, 0x01u,
+            0x07u, 0x05u, 0x01u, 0x01u, 0x6Du, 0x02u, 0x00u,
+            0x0Au, 0x04u, 0x01u, 0x02u, 0x00u, 0x0Bu
+        };
+        CHECK(validate_bytes(mem_import, sizeof(mem_import)) ==
+              WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED, "memory import rejected");
+        CHECK(validate_bytes(two_memories, sizeof(two_memories)) ==
+              WASM_ERR_INVALID_SECTION, "two defined memories rejected");
+        CHECK(validate_bytes(dup_memory, sizeof(dup_memory)) ==
+              WASM_ERR_INVALID_SECTION, "duplicate memory sections rejected");
+        CHECK(validate_bytes(two_tables, sizeof(two_tables)) ==
+              WASM_ERR_INVALID_SECTION, "two tables rejected");
+        CHECK(validate_bytes(dup_table, sizeof(dup_table)) ==
+              WASM_ERR_INVALID_SECTION, "duplicate table sections rejected");
+        CHECK(validate_bytes(mem_export_ok, sizeof(mem_export_ok)) ==
+              WASM_OK, "memory export accepted (inert)");
+    }
+
     /* Repeat the corpus under independent assertions to make the minimum
      * check count explicit and to catch accidental state retention. */
     for (i = 0u; i < 88u; i++) {

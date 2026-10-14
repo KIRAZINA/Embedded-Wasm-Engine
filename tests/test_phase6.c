@@ -328,6 +328,19 @@ static void test_link_errors(void)
     CHECK(wasm_bind_imports(&ipp, &tpp, NULL, map, (uint32_t)WASM_MAX_FUNCTIONS, &n) == WASM_ERR_UNRESOLVED_IMPORT, "bind NULL registry -> UNRESOLVED");
     CHECK(wasm_bind_imports(&ipp, &tpp, &g_reg, map, 0u, &n) == WASM_ERR_SECTION_OVERFLOW, "bind cap 0 -> OVERFLOW");
     CHECK(wasm_bind_imports(NULL, &tpp, &g_reg, map, 16u, &n) == WASM_ERR_NULL, "bind NULL payload rejected");
+    /* Memory imports have no host memory object: clean rejection, never a
+     * silent skip (payload: 1 import "env"."mem", kind memory, min 1). */
+    {
+        static const uint8_t mem_imp[] = {
+            0x01, 0x03, 0x65, 0x6E, 0x76, 0x03, 0x6D, 0x65, 0x6D,
+            0x02, 0x00, 0x01
+        };
+        wasm_slice_t mp;
+        mp.data = mem_imp;
+        mp.len = (size_t)sizeof(mem_imp);
+        CHECK(wasm_bind_imports(&mp, NULL, &g_reg, map, (uint32_t)WASM_MAX_FUNCTIONS, &n) ==
+              WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED, "memory import -> UNSUPPORTED");
+    }
     /* Export miss on a healthy module. */
     {
         wasm_slice_t pay = payload_of(&m, (uint8_t)WASM_SECT_EXPORT, &ok);
@@ -407,6 +420,16 @@ static void test_memory_and_footprint(void)
     }
     CHECK(wasm_get_memory_min(&m, &min, &present) == WASM_ERR_INVALID_SECTION, "flags=2 rejected");
     CHECK(wasm_get_memory_min(NULL, &min, &present) == WASM_ERR_NULL, "memory NULL mod rejected");
+    { /* Two defined memories: MVP allows at most one (validator agrees). */
+        static const uint8_t kM7[] = {
+            0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+            0x05, 0x05, 0x02, 0x00, 0x01, 0x00, 0x01
+        };
+        if (!parse_mod(kM7, sizeof(kM7), &m, "M7 parses")) {
+            return;
+        }
+        CHECK(wasm_get_memory_min(&m, &min, &present) == WASM_ERR_INVALID_SECTION, "two memories rejected");
+    }
     engine = sizeof(wasm_vm_t) + sizeof(wasm_host_registry_t) +
              sizeof(wasm_memory_t) +
              (size_t)WASM_MAX_FUNCTIONS * sizeof(uint32_t);
