@@ -159,6 +159,47 @@ wasm_trap_t wasm_memory_store_u8(wasm_memory_t *m, uint32_t offset, uint8_t v)
     return WASM_TRAP_OK;
 }
 
+/* ---- u16 (LE, byte-wise; bounds-checked as one 2-byte access so a
+ * trapped half can never leave a partial read/write) ---- */
+
+wasm_trap_t wasm_memory_load_u16(const wasm_memory_t *m, uint32_t offset, uint16_t *out)
+{
+    wasm_trap_t tr;
+    uint16_t u;
+    if (m == NULL || out == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    if (m->bytes == NULL) {
+        return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+    }
+    tr = check_bounds(m, offset, 2u);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    u = (uint16_t)m->bytes[offset] |
+        (uint16_t)((uint16_t)m->bytes[offset + 1u] << 8u);
+    *out = u;
+    return WASM_TRAP_OK;
+}
+
+wasm_trap_t wasm_memory_store_u16(wasm_memory_t *m, uint32_t offset, uint16_t v)
+{
+    wasm_trap_t tr;
+    if (m == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    if (m->bytes == NULL) {
+        return WASM_TRAP_MEMORY_OUT_OF_BOUNDS;
+    }
+    tr = check_bounds(m, offset, 2u);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    m->bytes[offset]      = (uint8_t)(v & 0xFFu);
+    m->bytes[offset + 1u] = (uint8_t)((v >> 8u) & 0xFFu);
+    return WASM_TRAP_OK;
+}
+
 /* ---- i32 (LE, byte-wise) ---- */
 
 wasm_trap_t wasm_memory_load_i32(const wasm_memory_t *m, uint32_t offset, int32_t *out)

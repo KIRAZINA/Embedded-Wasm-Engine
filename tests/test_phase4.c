@@ -82,6 +82,24 @@ static size_t enc_f64(uint8_t *out, uint64_t bits)
     return 8u;
 }
 
+/* SLEB128 encode of a 64-bit value (i64.const immediates). */
+static size_t enc_s64(uint8_t *out, int64_t v)
+{
+    size_t n = 0u;
+    int more = 1;
+    while (more) {
+        uint8_t b = (uint8_t)(v & 0x7F);
+        v >>= 7; /* gcc: arithmetic shift; test-side assembler only */
+        if ((v == 0 && (b & 0x40u) == 0u) || (v == -1 && (b & 0x40u) != 0u)) {
+            more = 0;
+        } else {
+            b |= 0x80u;
+        }
+        out[n++] = b;
+    }
+    return n;
+}
+
 /* Fresh VM + bound memory, enter (0 params, nlocals, nret), attach, run. */
 static wasm_trap_t exec_bytes(const uint8_t *code, size_t len,
                               uint32_t nlocals, uint32_t nret)
@@ -478,6 +496,252 @@ static void test_mem_float(void)
           "float mem opcode encodings");
 }
 
+static void test_mem_extended(void)
+{
+    printf("[T] I64/SUB-WORD LOADS/STORES, MEMORY.SIZE/GROW\n");
+    { /* i64 aligned round-trip @300 with high bits set. */
+        uint8_t code[64];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 300);
+        code[n++] = 0x42u; n += enc_s64(code + n, (int64_t)0x0102030405060708LL);
+        code[n++] = (uint8_t)OP_I64_STORE; code[n++] = 0x03; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 300);
+        code[n++] = (uint8_t)OP_I64_LOAD; code[n++] = 0x03; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run i64 store/load @300");
+        expect_i64((int64_t)0x0102030405060708LL, "i64 bytes round-trip exact");
+        CHECK(g_arena[300] == 0x08u && g_arena[303] == 0x05u &&
+              g_arena[306] == 0x02u && g_arena[307] == 0x01u, "LE bytes 08..01 in arena");
+    }
+    { /* i32 sub-word sign/zero extension from 0xFFFFFFFF. */
+        uint8_t code[64];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 50);
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, -1);
+        code[n++] = (uint8_t)OP_I32_STORE; code[n++] = 0x02; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 50);
+        code[n++] = (uint8_t)OP_I32_LOAD8_S; code[n++] = 0x00; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 50);
+        code[n++] = (uint8_t)OP_I32_LOAD8_U; code[n++] = 0x00; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 50);
+        code[n++] = (uint8_t)OP_I32_LOAD16_S; code[n++] = 0x01; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 50);
+        code[n++] = (uint8_t)OP_I32_LOAD16_U; code[n++] = 0x01; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run sub-word loads");
+        expect_i32(65535, "load16_u(0xFFFF) == 65535");
+        expect_i32(-1, "load16_s(0xFFFF) == -1");
+        expect_i32(255, "load8_u(0xFF) == 255");
+        expect_i32(-1, "load8_s(0xFF) == -1");
+    }
+    { /* i32.load8_s of 0x7F stays positive (sign bit clear). */
+        uint8_t code[48];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 52);
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 0x7F);
+        code[n++] = (uint8_t)OP_I32_STORE8; code[n++] = 0x00; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 52);
+        code[n++] = (uint8_t)OP_I32_LOAD8_S; code[n++] = 0x00; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run store8/load8_s 0x7F");
+        expect_i32(127, "load8_s(0x7F) == 127");
+    }
+    { /* i64 sub-word extension from all-set bytes. */
+        uint8_t code[96];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 400);
+        code[n++] = 0x42u; code[n++] = 0x7F;
+        code[n++] = (uint8_t)OP_I64_STORE; code[n++] = 0x03; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 400);
+        code[n++] = (uint8_t)OP_I64_LOAD8_S; code[n++] = 0x00; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 400);
+        code[n++] = (uint8_t)OP_I64_LOAD8_U; code[n++] = 0x00; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 400);
+        code[n++] = (uint8_t)OP_I64_LOAD16_S; code[n++] = 0x01; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 400);
+        code[n++] = (uint8_t)OP_I64_LOAD16_U; code[n++] = 0x01; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 400);
+        code[n++] = (uint8_t)OP_I64_LOAD32_S; code[n++] = 0x02; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 400);
+        code[n++] = (uint8_t)OP_I64_LOAD32_U; code[n++] = 0x02; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run i64 sub-word loads");
+        expect_i64((int64_t)4294967295u, "load32_u(-1) == 4294967295");
+        expect_i64(-1, "load32_s(-1) == -1");
+        expect_i64(65535, "load16_u(-1) == 65535");
+        expect_i64(-1, "load16_s(-1) == -1");
+        expect_i64(255, "load8_u(-1) == 255");
+        expect_i64(-1, "load8_s(-1) == -1");
+    }
+    { /* unaligned sub-word load16 @1. */
+        uint8_t code[48];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 1);
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 0xABCD);
+        code[n++] = (uint8_t)OP_I32_STORE16; code[n++] = 0x01; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 1);
+        code[n++] = (uint8_t)OP_I32_LOAD16_U; code[n++] = 0x01; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run store16/load16 @1");
+        expect_i32(0xABCD, "unaligned load16_u == 0xABCD");
+        CHECK(g_arena[1] == 0xCDu && g_arena[2] == 0xABu, "LE bytes CD AB in arena");
+    }
+    { /* store truncation: only the low byte(s) land. */
+        uint8_t code[64];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 70);
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 0x1234);
+        code[n++] = (uint8_t)OP_I32_STORE8; code[n++] = 0x00; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 72);
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 0x123456);
+        code[n++] = (uint8_t)OP_I32_STORE16; code[n++] = 0x01; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 74);
+        code[n++] = 0x42u; n += enc_s64(code + n, (int64_t)0x1FFLL);
+        code[n++] = (uint8_t)OP_I64_STORE8; code[n++] = 0x00; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 76);
+        code[n++] = 0x42u; n += enc_s64(code + n, (int64_t)0x12345LL);
+        code[n++] = (uint8_t)OP_I64_STORE16; code[n++] = 0x01; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run truncating stores");
+        CHECK(g_arena[70] == 0x34u, "store8 keeps low byte 0x34");
+        CHECK(g_arena[72] == 0x56u && g_arena[73] == 0x34u, "store16 keeps 56 34");
+        CHECK(g_arena[74] == 0xFFu, "i64 store8 keeps 0xFF");
+        CHECK(g_arena[76] == 0x45u && g_arena[77] == 0x23u, "i64 store16 keeps 45 23");
+    }
+    { /* i64.store32 keeps the low 32 bits; load back signed. */
+        uint8_t code[48];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 410);
+        code[n++] = 0x42u; code[n++] = 0x7F;
+        code[n++] = (uint8_t)OP_I64_STORE32; code[n++] = 0x02; code[n++] = 0x00;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 410);
+        code[n++] = (uint8_t)OP_I64_LOAD32_S; code[n++] = 0x02; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run store32/load32_s");
+        expect_i64(-1, "store32(-1)/load32_s == -1");
+        CHECK(g_arena[410] == 0xFFu && g_arena[413] == 0xFFu, "store32 wrote 4 bytes");
+    }
+    { /* sub-word boundary OOB: 1 byte left for a 2-byte load. */
+        uint8_t code[16];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 65535);
+        code[n++] = (uint8_t)OP_I32_LOAD16_S; code[n++] = 0x01; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_MEMORY_OUT_OF_BOUNDS, "load16 @cap-1 -> OOB");
+    }
+    { /* store8 exactly at the end of memory is out of bounds. */
+        uint8_t code[32];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 65536);
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 9);
+        code[n++] = (uint8_t)OP_I32_STORE8; code[n++] = 0x00; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_MEMORY_OUT_OF_BOUNDS, "store8 @cap -> OOB");
+    }
+    { /* memory.size reports the bound page count. */
+        static const uint8_t k[] = { 0x3F, 0x00 };
+        CHECK(exec_bytes(k, sizeof(k), 0u, 0u) == WASM_TRAP_OK, "run memory.size");
+        expect_i32(1, "size == 1 page");
+    }
+    { /* memory.grow failure (max 1) returns -1, never traps. */
+        uint8_t code[16];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 1);
+        code[n++] = (uint8_t)OP_MEMORY_GROW; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run failing grow");
+        expect_i32(-1, "grow past max -> -1");
+    }
+    { /* memory.grow with a huge delta returns -1, never traps. */
+        uint8_t code[16];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 2147483647);
+        code[n++] = (uint8_t)OP_MEMORY_GROW; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run huge grow");
+        expect_i32(-1, "grow 2^31-1 pages -> -1");
+    }
+    { /* memory.grow with a negative delta returns -1, never traps. */
+        uint8_t code[16];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, -1);
+        code[n++] = (uint8_t)OP_MEMORY_GROW; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run negative grow");
+        expect_i32(-1, "grow -1 pages -> -1");
+    }
+    { /* memory.grow delta 0 succeeds and reports the current size. */
+        uint8_t code[16];
+        size_t n = 0u;
+        code[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(code + n, 0);
+        code[n++] = (uint8_t)OP_MEMORY_GROW; code[n++] = 0x00;
+        CHECK(exec_bytes(code, n, 0u, 0u) == WASM_TRAP_OK, "run grow 0");
+        expect_i32(1, "grow 0 -> 1 (current pages)");
+    }
+    { /* successful grow publishes a new page that size/loads can see. */
+        uint8_t grow[16];
+        size_t n = 0u;
+        static const uint8_t size[] = { 0x3F, 0x00 };
+        grow[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(grow + n, 1);
+        grow[n++] = (uint8_t)OP_MEMORY_GROW; grow[n++] = 0x00;
+        CHECK(wasm_vm_init(&g_vm) == WASM_TRAP_OK, "init grow-2 vm");
+        CHECK(wasm_memory_init(&g_mem2, g_arena2, (uint32_t)sizeof(g_arena2), 1u, 2u) == WASM_TRAP_OK, "1-page mem, max 2");
+        CHECK(wasm_vm_bind_memory(&g_vm, &g_mem2) == WASM_TRAP_OK, "bind grow-2 arena");
+        CHECK(wasm_vm_enter_function(&g_vm, 0u, 0u, 0u, 0u) == WASM_TRAP_OK, "enter");
+        CHECK(wasm_vm_attach_code(&g_vm, grow, n) == WASM_TRAP_OK, "attach grow");
+        CHECK(wasm_vm_run(&g_vm) == WASM_TRAP_OK, "run grow 1");
+        expect_i32(1, "grow 1 from 1 page -> prev 1");
+        CHECK(wasm_vm_init(&g_vm) == WASM_TRAP_OK, "re-init for size");
+        CHECK(wasm_vm_bind_memory(&g_vm, &g_mem2) == WASM_TRAP_OK, "re-bind grown mem");
+        CHECK(wasm_vm_enter_function(&g_vm, 0u, 0u, 0u, 0u) == WASM_TRAP_OK, "re-enter");
+        CHECK(wasm_vm_attach_code(&g_vm, size, sizeof(size)) == WASM_TRAP_OK, "attach size");
+        CHECK(wasm_vm_run(&g_vm) == WASM_TRAP_OK, "run size after grow");
+        expect_i32(2, "size == 2 after grow");
+    }
+    { /* nonzero reserved byte rejected; missing reserved overruns. */
+        static const uint8_t bad[] = { 0x3F, 0x01 };
+        static const uint8_t bare[] = { 0x3F };
+        static const uint8_t badg[] = { 0x41, 0x00, 0x40, 0x02 };
+        CHECK(exec_bytes(bad, sizeof(bad), 0u, 0u) == WASM_TRAP_INVALID_ARGUMENT, "size reserved 0x01 -> INVALID_ARGUMENT");
+        CHECK(exec_bytes(bare, sizeof(bare), 0u, 0u) == WASM_TRAP_CODE_OVERRUN, "size w/o reserved -> CODE_OVERRUN");
+        CHECK(exec_bytes(badg, sizeof(badg), 0u, 0u) == WASM_TRAP_INVALID_ARGUMENT, "grow reserved 0x02 -> INVALID_ARGUMENT");
+    }
+    { /* unbound memory: size is 0, grow is -1, loads still trap. */
+        static const uint8_t size[] = { 0x3F, 0x00 };
+        uint8_t grow[16];
+        size_t n = 0u;
+        uint8_t load[16];
+        size_t m = 0u;
+        grow[n++] = (uint8_t)OP_I32_CONST; n += enc_s32(grow + n, 1);
+        grow[n++] = (uint8_t)OP_MEMORY_GROW; grow[n++] = 0x00;
+        load[m++] = (uint8_t)OP_I32_CONST; m += enc_s32(load + m, 0);
+        load[m++] = (uint8_t)OP_I64_LOAD8_U; load[m++] = 0x00; load[m++] = 0x00;
+        CHECK(wasm_vm_init(&g_vm) == WASM_TRAP_OK, "init (no memory bound)");
+        CHECK(wasm_vm_enter_function(&g_vm, 0u, 0u, 0u, 0u) == WASM_TRAP_OK, "enter");
+        CHECK(wasm_vm_attach_code(&g_vm, size, sizeof(size)) == WASM_TRAP_OK, "attach size");
+        CHECK(wasm_vm_run(&g_vm) == WASM_TRAP_OK, "run unbound size");
+        expect_i32(0, "unbound size == 0");
+        CHECK(wasm_vm_init(&g_vm) == WASM_TRAP_OK, "re-init (no memory bound)");
+        CHECK(wasm_vm_enter_function(&g_vm, 0u, 0u, 0u, 0u) == WASM_TRAP_OK, "re-enter");
+        CHECK(wasm_vm_attach_code(&g_vm, grow, n) == WASM_TRAP_OK, "attach grow");
+        CHECK(wasm_vm_run(&g_vm) == WASM_TRAP_OK, "run unbound grow");
+        expect_i32(-1, "unbound grow -> -1");
+        CHECK(wasm_vm_init(&g_vm) == WASM_TRAP_OK, "re-init (no memory bound)");
+        CHECK(wasm_vm_enter_function(&g_vm, 0u, 0u, 0u, 0u) == WASM_TRAP_OK, "re-enter");
+        CHECK(wasm_vm_attach_code(&g_vm, load, m) == WASM_TRAP_OK, "attach load");
+        CHECK(wasm_vm_run(&g_vm) == WASM_TRAP_MEMORY_OUT_OF_BOUNDS, "unbound sub-word load -> OOB");
+    }
+    { /* mistyped operands trap: i64 base, i64 value for i32 store8. */
+        uint8_t k1[16];
+        size_t n = 0u;
+        uint8_t k2[32];
+        size_t m = 0u;
+        k1[n++] = 0x42u; k1[n++] = 0x00;
+        k1[n++] = (uint8_t)OP_I64_LOAD; k1[n++] = 0x03; k1[n++] = 0x00;
+        CHECK(exec_bytes(k1, n, 0u, 0u) == WASM_TRAP_TYPE_MISMATCH, "i64.load i64 base -> TYPE_MISMATCH");
+        k2[m++] = (uint8_t)OP_I32_CONST; m += enc_s32(k2 + m, 8);
+        k2[m++] = 0x42u; k2[m++] = 0x01;
+        k2[m++] = (uint8_t)OP_I32_STORE8; k2[m++] = 0x00; k2[m++] = 0x00;
+        CHECK(exec_bytes(k2, m, 0u, 0u) == WASM_TRAP_TYPE_MISMATCH, "i32.store8 i64 value -> TYPE_MISMATCH");
+    }
+    CHECK((uint8_t)OP_I64_LOAD == 0x29u && (uint8_t)OP_I32_LOAD8_S == 0x2Cu &&
+          (uint8_t)OP_I32_LOAD16_U == 0x2Fu && (uint8_t)OP_I64_LOAD8_S == 0x30u &&
+          (uint8_t)OP_I64_LOAD16_U == 0x33u && (uint8_t)OP_I64_LOAD32_S == 0x34u &&
+          (uint8_t)OP_I64_LOAD32_U == 0x35u && (uint8_t)OP_I64_STORE == 0x37u &&
+          (uint8_t)OP_I32_STORE8 == 0x3Au && (uint8_t)OP_I32_STORE16 == 0x3Bu &&
+          (uint8_t)OP_I64_STORE8 == 0x3Cu && (uint8_t)OP_I64_STORE16 == 0x3Du &&
+          (uint8_t)OP_I64_STORE32 == 0x3Eu && (uint8_t)OP_MEMORY_SIZE == 0x3Fu &&
+          (uint8_t)OP_MEMORY_GROW == 0x40u, "extended mem opcode encodings");
+}
+
 static void test_consts_locals_traps(void)
 {
     printf("[T] I64 const, locals via step, unknown/unreachable/overrun traps\n");
@@ -562,6 +826,7 @@ int main(void)
     test_compare();
     test_mem_ops();
     test_mem_float();
+    test_mem_extended();
     test_consts_locals_traps();
     test_footprint();
     printf("--------------------------------------------\n");
