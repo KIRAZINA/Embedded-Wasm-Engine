@@ -22,8 +22,8 @@ The VM `wasm_vm_step` switch `default:` returns
 
 | verdict | count |
 |---|---:|
-| OK | 158 |
-| UNTESTED | 14 |
+| OK | 172 |
+| UNTESTED | 0 |
 | MISSING_IN_VALIDATOR | 0 |
 | MISSING_IN_VM | 0 |
 | NOT_IN_ENUM | 0 |
@@ -109,11 +109,11 @@ The VM `wasm_vm_step` switch `default:` returns
 | 5e | f32.gt | yes | yes | yes | yes | OK |
 | 5f | f32.le | yes | yes | yes | yes | OK |
 | 60 | f32.ge | yes | yes | yes | yes | OK |
-| 61 | f64.eq | yes | yes | yes | no | UNTESTED |
+| 61 | f64.eq | yes | yes | yes | yes | OK |
 | 62 | f64.ne | yes | yes | yes | yes | OK |
 | 63 | f64.lt | yes | yes | yes | yes | OK |
-| 64 | f64.gt | yes | yes | yes | no | UNTESTED |
-| 65 | f64.le | yes | yes | yes | no | UNTESTED |
+| 64 | f64.gt | yes | yes | yes | yes | OK |
+| 65 | f64.le | yes | yes | yes | yes | OK |
 | 66 | f64.ge | yes | yes | yes | yes | OK |
 | 67 | i32.clz | yes | yes | yes | yes | OK |
 | 68 | i32.ctz | yes | yes | yes | yes | OK |
@@ -141,14 +141,14 @@ The VM `wasm_vm_step` switch `default:` returns
 | 7e | i64.mul | yes | yes | yes | yes | OK |
 | 7f | i64.div_s | yes | yes | yes | yes | OK |
 | 80 | i64.div_u | yes | yes | yes | yes | OK |
-| 81 | i64.rem_s | yes | yes | yes | no | UNTESTED |
-| 82 | i64.rem_u | yes | yes | yes | no | UNTESTED |
-| 83 | i64.and | yes | yes | yes | no | UNTESTED |
-| 84 | i64.or | yes | yes | yes | no | UNTESTED |
-| 85 | i64.xor | yes | yes | yes | no | UNTESTED |
-| 86 | i64.shl | yes | yes | yes | no | UNTESTED |
-| 87 | i64.shr_s | yes | yes | yes | no | UNTESTED |
-| 88 | i64.shr_u | yes | yes | yes | no | UNTESTED |
+| 81 | i64.rem_s | yes | yes | yes | yes | OK |
+| 82 | i64.rem_u | yes | yes | yes | yes | OK |
+| 83 | i64.and | yes | yes | yes | yes | OK |
+| 84 | i64.or | yes | yes | yes | yes | OK |
+| 85 | i64.xor | yes | yes | yes | yes | OK |
+| 86 | i64.shl | yes | yes | yes | yes | OK |
+| 87 | i64.shr_s | yes | yes | yes | yes | OK |
+| 88 | i64.shr_u | yes | yes | yes | yes | OK |
 | 89 | i64.rotl | yes | yes | yes | yes | OK |
 | 8a | i64.rotr | yes | yes | yes | yes | OK |
 | 8b | f32.abs | yes | yes | yes | yes | OK |
@@ -193,11 +193,11 @@ The VM `wasm_vm_step` switch `default:` returns
 | b2 | f32.convert_i32_s | yes | yes | yes | yes | OK |
 | b3 | f32.convert_i32_u | yes | yes | yes | yes | OK |
 | b4 | f32.convert_i64_s | yes | yes | yes | yes | OK |
-| b5 | f32.convert_i64_u | yes | yes | yes | no | UNTESTED |
+| b5 | f32.convert_i64_u | yes | yes | yes | yes | OK |
 | b6 | f32.demote_f64 | yes | yes | yes | yes | OK |
 | b7 | f64.convert_i32_s | yes | yes | yes | yes | OK |
-| b8 | f64.convert_i32_u | yes | yes | yes | no | UNTESTED |
-| b9 | f64.convert_i64_s | yes | yes | yes | no | UNTESTED |
+| b8 | f64.convert_i32_u | yes | yes | yes | yes | OK |
+| b9 | f64.convert_i64_s | yes | yes | yes | yes | OK |
 | ba | f64.convert_i64_u | yes | yes | yes | yes | OK |
 | bb | f64.promote_f32 | yes | yes | yes | yes | OK |
 | bc | i32.reinterpret_f32 | yes | yes | yes | yes | OK |

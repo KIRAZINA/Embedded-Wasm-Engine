@@ -288,8 +288,8 @@ static void test_min_div_neg1(void)
     printf("[T] INT32_MIN / -1 overflow traps + unsigned control\n");
     check_binop_trap(INT32_MIN, -1, (uint8_t)OP_I32_DIV_S,
                      WASM_TRAP_INTEGER_OVERFLOW, "MIN/-1 DIV_S -> INTEGER_OVERFLOW");
-    check_binop_trap(INT32_MIN, -1, (uint8_t)OP_I32_REM_S,
-                     WASM_TRAP_INTEGER_OVERFLOW, "MIN%-1 REM_S -> INTEGER_OVERFLOW");
+    check_binop(INT32_MIN, -1, (uint8_t)OP_I32_REM_S, 0,
+                "MIN%-1 REM_S == 0 (MVP, no trap)");
     check_binop(INT32_MIN, -1, (uint8_t)OP_I32_DIV_U, 0, "MIN/-1 DIV_U == 0 (unsigned, no trap)");
     check_binop(INT32_MIN, 2, (uint8_t)OP_I32_REM_S, 0, "MIN%2 == 0");
     check_binop(INT32_MAX, 1, (uint8_t)OP_I32_DIV_S, INT32_MAX, "MAX/1 == MAX");
@@ -457,6 +457,18 @@ static void test_bitops_i64(void)
     check_i64_binop((int64_t)0x123456789ABCDEF0LL, 0, (uint8_t)OP_I64_ROTL, (int64_t)0x123456789ABCDEF0LL, "i64 rotl(x,0) == x");
     check_i64_binop((int64_t)0x123456789ABCDEF0LL, 64, (uint8_t)OP_I64_ROTR, (int64_t)0x123456789ABCDEF0LL, "i64 rotr(x,64) == x");
     check_i64_binop((int64_t)0x123456789ABCDEF0LL, 68, (uint8_t)OP_I64_ROTL, (int64_t)0x23456789ABCDEF01LL, "i64 rotl(x,68) == rotl(x,4)");
+    check_i64_binop(7, 2, (uint8_t)OP_I64_REM_S, 1, "i64 7%2 == 1");
+    check_i64_binop(-7, 2, (uint8_t)OP_I64_REM_S, -1, "i64 -7%2 == -1 (sign of dividend)");
+    check_i64_binop((int64_t)0x8000000000000000LL, -1, (uint8_t)OP_I64_REM_S, 0, "i64 MIN%-1 == 0 (MVP, no trap)");
+    check_i64_binop((int64_t)0xFFFFFFFFFFFFFFFFLL, 2, (uint8_t)OP_I64_REM_U, 1, "i64 u64max%2 == 1");
+    check_i64_binop(12, 10, (uint8_t)OP_I64_AND, 8, "i64 12&10 == 8");
+    check_i64_binop(12, 10, (uint8_t)OP_I64_OR, 14, "i64 12|10 == 14");
+    check_i64_binop(12, 10, (uint8_t)OP_I64_XOR, 6, "i64 12^10 == 6");
+    check_i64_binop(1, 63, (uint8_t)OP_I64_SHL, (int64_t)0x8000000000000000LL, "i64 1<<63 == MIN");
+    check_i64_binop(1, 65, (uint8_t)OP_I64_SHL, 2, "i64 shift 65 masked to 1");
+    check_i64_binop(-1, 1, (uint8_t)OP_I64_SHR_S, -1, "i64 -1>>1 arith == -1");
+    check_i64_binop((int64_t)0x8000000000000000LL, 1, (uint8_t)OP_I64_SHR_U, (int64_t)0x4000000000000000LL, "i64 MIN>>1 logical");
+    check_i64_binop(-1, 65, (uint8_t)OP_I64_SHR_U, INT64_MAX, "i64 shr count masked %64");
     {
         uint8_t code[24];
         size_t n = 0u;
