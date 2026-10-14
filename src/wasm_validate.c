@@ -328,6 +328,9 @@ static wasm_err_t vopen_block(validator_t *v, uint8_t kind, uint8_t result,
                               uint32_t height)
 {
     vctrl_t *f;
+    /* Capture the enclosing unreachability BEFORE pushing: afterwards the
+     * top frame is the new one itself. */
+    int parent_dead = vunreach(v);
     if (v->cdepth >= (uint32_t)WASM_MAX_CONTROL_STACK_DEPTH) {
         return WASM_ERR_INVALID_BLOCK;
     }
@@ -335,7 +338,9 @@ static wasm_err_t vopen_block(validator_t *v, uint8_t kind, uint8_t result,
     f->kind = kind;
     f->result = result;
     f->height = height;
-    f->unreachable = 0;
+    /* A block opened in dead code starts dead: the polymorphic stack
+     * extends into nested frames (spec unreachable/merge behavior). */
+    f->unreachable = parent_dead;
     f->has_else = 0;
     return WASM_OK;
 }
@@ -515,7 +520,12 @@ static wasm_err_t vfunc_body(validator_t *v, const uint8_t *body,
             }
             v->vtop = f->height;
             f->has_else = 1;
-            f->unreachable = 0;
+            /* The else branch is reachable iff the enclosing context is:
+             * a `br`-terminated then-branch does not kill it, but dead
+             * outer code keeps it dead. */
+            f->unreachable = (v->cdepth >= 2u)
+                                 ? v->cs[v->cdepth - 2u].unreachable
+                                 : v->func_unreachable;
             break;
         }
         case 0x0Bu: { /* end: close a block, or the function itself */
