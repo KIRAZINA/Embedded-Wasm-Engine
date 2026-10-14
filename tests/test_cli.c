@@ -115,6 +115,17 @@ static void run_case(const char *tag, const unsigned char *mod, size_t mod_len,
     CHECK(strstr(out, want) != NULL, "exact i64 result line printed");
 }
 
+/* Module importing a memory ("env"."mem", min 1): no host memory object
+ * exists, so the validator must reject it with a typed error. */
+static const unsigned char kModMemImport[] = {
+    0x00, 0x61, 0x73, 0x6D, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x04, 0x01, 0x60, 0x00, 0x00,
+    0x02, 0x0C, 0x01, 0x03, 0x65, 0x6E, 0x76,
+    0x03, 0x6D, 0x65, 0x6D, 0x02, 0x00, 0x01,
+    0x03, 0x02, 0x01, 0x00,
+    0x0A, 0x04, 0x01, 0x02, 0x00, 0x0B
+};
+
 static void test_validation(void)
 {
     char wasm_path[128];
@@ -172,6 +183,45 @@ static void test_validation(void)
           "runtime trap reported instead");
 }
 
+static void test_mem_import(void)
+{
+    char wasm_path[128];
+    char out_path[128];
+    char cmd[384];
+    char out[1024];
+    FILE *fp = NULL;
+    size_t n = 0u;
+    size_t w = 0u;
+    int rc;
+
+    printf("[T] CLI rejects memory imports with a typed error\n");
+    sprintf(wasm_path, "build%scli_memimport.wasm", SEP);
+    sprintf(out_path, "build%scli_memimport.txt", SEP);
+    fp = fopen(wasm_path, "wb");
+    CHECK(fp != NULL, "memimport wasm file opened for writing");
+    if (fp == NULL) {
+        return;
+    }
+    w = fwrite(kModMemImport, 1u, sizeof(kModMemImport), fp);
+    fclose(fp);
+    CHECK(w == sizeof(kModMemImport), "memimport wasm bytes fully written");
+
+    sprintf(cmd, "%s %s main > %s 2>&1", RUNNER, wasm_path, out_path);
+    rc = system(cmd);
+    CHECK(rc != 0, "memory import rejected (nonzero exit)");
+    fp = fopen(out_path, "rb");
+    CHECK(fp != NULL, "rejection output captured");
+    if (fp == NULL) {
+        return;
+    }
+    n = fread(out, 1u, sizeof(out) - 1u, fp);
+    fclose(fp);
+    out[n] = '\0';
+    CHECK(strstr(out, "validation:") != NULL, "stderr names validation");
+    CHECK(strstr(out, "WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED") != NULL,
+          "typed unsupported-memory error printed");
+}
+
 int main(void)
 {
     printf("=== CLI tests: runner i64 result printing ===\n");
@@ -180,6 +230,7 @@ int main(void)
     run_case("min", kModMin, sizeof(kModMin),
              "result: -9223372036854775808 (i64)");
     test_validation();
+    test_mem_import();
     printf("--------------------------------------------\n");
     printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
     if (g_fail != 0) {

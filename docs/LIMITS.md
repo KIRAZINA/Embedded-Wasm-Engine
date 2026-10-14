@@ -46,3 +46,16 @@ engine_static_footprint=108616 bytes
 `tools/size_report.c` contains a compile-time assertion that `wasm_vm_t`
 fits the documented 112 KiB STM32F4 VM budget. The CLI and guest memory arena
 are application-level storage in addition to the engine object.
+
+## Import and export support (MVP subset)
+
+| Kind | Import | Export |
+|---|---|---|
+| Function | Supported via the host registry (signature-checked) | Supported (resolved by name) |
+| Table | Rejected (`WASM_ERR_IMPORTED_TABLES_UNSUPPORTED`): the host has no table concept | Rejected unless exactly one funcref table is defined; execution never consults export entries |
+| Memory | Rejected (`WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED`): the host has no memory object to bind — accepting would silently misdirect `memory.size` / `memory.grow` / data segments | Accepted but inert (memory ops use the bound memory regardless of exports) |
+| Global | Supported via the host registry (type-checked) | Accepted (CLI name resolution is function-only) |
+
+At most one table section and at most one memory section, and at most one
+defined table / memory: anything more is rejected as malformed
+(`WASM_ERR_INVALID_SECTION`), never silently shadowed by first-match.

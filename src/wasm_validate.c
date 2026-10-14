@@ -1466,6 +1466,33 @@ func_end:
 
 /* ---- module-level validation ---- */
 
+/* Count sections carrying the given id (MVP allows at most one of each;
+ * this validator enforces it for the table/memory sections it reasons
+ * about; other ids stay first-match, as before). */
+static wasm_err_t vcount_sections(const wasm_module_t *mod, uint8_t id,
+                                  uint32_t *out)
+{
+    const uint8_t *cursor;
+    uint32_t n = 0u;
+    wasm_err_t rc;
+    if (mod == NULL || out == NULL) {
+        return WASM_ERR_NULL;
+    }
+    cursor = mod->sections_begin;
+    while (cursor < mod->sections_end) {
+        wasm_section_header_t sec;
+        rc = wasm_get_section(&cursor, mod->sections_end, &sec);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        if (sec.id == id) {
+            n++;
+        }
+    }
+    *out = n;
+    return WASM_OK;
+}
+
 /* Optional section fetch: absent -> empty slice. */
 static wasm_err_t vopt_section(const wasm_module_t *mod, uint8_t id,
                                wasm_slice_t *out, int *present)
@@ -1549,6 +1576,26 @@ wasm_err_t wasm_validate_module(const wasm_module_t *mod)
     rc = vopt_section(mod, WASM_SECT_EXPORT, &expp, &has_exp);
     if (rc != WASM_OK) {
         return rc;
+    }
+
+    /* At most one table section and at most one memory section (MVP):
+     * duplicates would otherwise be silently shadowed by first-match. */
+    {
+        uint32_t nsec = 0u;
+        rc = vcount_sections(mod, (uint8_t)WASM_SECT_TABLE, &nsec);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        if (nsec > 1u) {
+            return WASM_ERR_INVALID_SECTION;
+        }
+        rc = vcount_sections(mod, (uint8_t)WASM_SECT_MEMORY, &nsec);
+        if (rc != WASM_OK) {
+            return rc;
+        }
+        if (nsec > 1u) {
+            return WASM_ERR_INVALID_SECTION;
+        }
     }
 
     /* Types: full single-pass validation. */
@@ -1652,27 +1699,10 @@ wasm_err_t wasm_validate_module(const wasm_module_t *mod)
             } else if (kind == 0x01u) {
                 return WASM_ERR_IMPORTED_TABLES_UNSUPPORTED;
             } else if (kind == 0x02u) {
-                uint32_t flags, min, maxv = 0u;
-                rc = leb128_decode_u32(&cur, end, &flags);
-                if (rc != WASM_OK) {
-                    return rc;
-                }
-                if (flags > 1u) {
-                    return WASM_ERR_INVALID_SECTION;
-                }
-                rc = leb128_decode_u32(&cur, end, &min);
-                if (rc != WASM_OK) {
-                    return rc;
-                }
-                if (flags & 1u) {
-                    rc = leb128_decode_u32(&cur, end, &maxv);
-                    if (rc != WASM_OK) {
-                        return rc;
-                    }
-                    if (maxv < min) {
-                        return WASM_ERR_INVALID_SECTION;
-                    }
-                }
+                /* memories: the host has no memory object to bind
+                 * (deliberate MVP cut, like tables): reject here so a
+                 * --no-validate link can never silently drop the import. */
+                return WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED;
             } else if (kind == 0x03u) {
                 uint8_t vt, mut;
                 if (!vreadable(cur, end, 2u)) {

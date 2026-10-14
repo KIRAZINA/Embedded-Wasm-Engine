@@ -540,11 +540,11 @@ wasm_err_t wasm_bind_imports(const wasm_slice_t *import_payload,
             /* tables: the host has no table concept (deliberate MVP cut). */
             return WASM_ERR_IMPORTED_TABLES_UNSUPPORTED;
         } else if (kind == 0x02u) {
-            /* memory: limits */
-            rc = skip_limits(&cur, end);
-            if (rc != WASM_OK) {
-                return rc;
-            }
+            /* memories: the host has no memory object to bind them to
+             * (deliberate MVP cut, like tables). Reject instead of
+             * silently skipping: skipping would link a module whose
+             * memory.size/grow/data segments act on the wrong memory. */
+            return WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED;
         } else if (kind == 0x03u) {
             /* global: valtype + mutability */
             if (!readable(cur, end, 2u)) {
@@ -1515,6 +1515,11 @@ wasm_err_t wasm_get_memory_min(const wasm_module_t *mod,
     rc = leb128_decode_u32(&cur, end, &count);
     if (rc != WASM_OK) {
         return rc;
+    }
+    if (count > 1u) {
+        /* MVP allows at most one memory; extras would be silently
+         * shadowed by first-match (same rule the validator enforces). */
+        return WASM_ERR_INVALID_SECTION;
     }
     if (count == 0u) {
         *out_min = 0u;

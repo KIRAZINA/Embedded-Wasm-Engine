@@ -50,7 +50,8 @@ typedef enum {
     WASM_ERR_INVALID_BLOCK,  /* block structure/nesting/result error */
     WASM_ERR_INVALID_LOCAL,  /* local index out of range */
     WASM_ERR_INVALID_GLOBAL, /* global index/mutability error */
-    WASM_ERR_INVALID_ALIGN   /* alignment exceeds the access size */
+    WASM_ERR_INVALID_ALIGN,  /* alignment exceeds the access size */
+    WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED, /* memory imports have no host concept */
 } wasm_err_t;
 
 /* Human-readable error name. Zero-alloc: returns string literals. */
@@ -81,6 +82,8 @@ static inline const char *wasm_err_str(wasm_err_t e)
     case WASM_ERR_INVALID_LOCAL:  return "WASM_ERR_INVALID_LOCAL";
     case WASM_ERR_INVALID_GLOBAL: return "WASM_ERR_INVALID_GLOBAL";
     case WASM_ERR_INVALID_ALIGN:  return "WASM_ERR_INVALID_ALIGN";
+    case WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED:
+        return "WASM_ERR_IMPORTED_MEMORIES_UNSUPPORTED";
     default:                       return "WASM_ERR_UNKNOWN";
     }
 }
