@@ -499,6 +499,66 @@ static void test_corpus(void)
         check_body(table_multi_ok, sizeof(table_multi_ok), WASM_OK,
                    "br_table labels+default accepted");
     }
+    {
+        /* Spec stack polymorphism: dead code may consume past the frame
+         * floor, and unreachable blocks merge regardless of contents. */
+        static const uint8_t dead_drop[] = {
+            0x00u, 0x41u, 0x01u, 0x1Au, 0x0Bu
+        };
+        static const uint8_t dead_valued[] = {
+            0x02u, 0x7Fu, 0x00u, 0x41u, 0x01u, 0x0Bu, 0x0Bu
+        };
+        static const uint8_t dead_br[] = {
+            0x02u, 0x40u, 0x00u, 0x0Cu, 0x00u, 0x0Bu, 0x0Bu
+        };
+        static const uint8_t dead_mismatch[] = {
+            0x00u, 0x42u, 0x00u, 0x0Bu
+        };
+        static const uint8_t dead_empty[] = { 0x00u, 0x0Bu };
+        static const uint8_t dead_nested_drop[] = {
+            0x00u, 0x02u, 0x40u, 0x1Au, 0x0Bu, 0x0Bu
+        };
+        static const uint8_t dead_nested_mismatch[] = {
+            0x00u, 0x02u, 0x7Fu, 0x42u, 0x00u, 0x0Bu, 0x0Bu
+        };
+        static const uint8_t dead_then_drop[] = {
+            0x00u, 0x41u, 0x01u, 0x04u, 0x40u, 0x1Au, 0x0Bu, 0x0Bu
+        };
+        static const uint8_t dead_else_drop[] = {
+            0x00u, 0x41u, 0x01u, 0x04u, 0x40u, 0x05u, 0x1Au, 0x0Bu, 0x0Bu
+        };
+        static const uint8_t dead_bad_label[] = {
+            0x02u, 0x40u, 0x00u, 0x0Cu, 0x01u, 0x0Bu, 0x0Bu
+        };
+        static const uint8_t live_mismatch[] = {
+            0x02u, 0x7Fu, 0x42u, 0x00u, 0x0Bu, 0x0Bu
+        };
+        static const uint8_t live_wrong_result[] = { 0x42u, 0x00u, 0x0Bu };
+        check_body(dead_drop, sizeof(dead_drop), WASM_OK,
+                   "unreachable, const, drop valid");
+        check_result_body(0x7Fu, dead_valued, sizeof(dead_valued), WASM_OK,
+                          "unreachable inside valued block valid");
+        check_body(dead_br, sizeof(dead_br), WASM_OK, "br in dead code valid");
+        check_result_body(0x7Fu, dead_mismatch, sizeof(dead_mismatch),
+                          WASM_OK, "dead end with result mismatch valid");
+        check_body(dead_empty, sizeof(dead_empty), WASM_OK,
+                   "unreachable then end valid");
+        check_body(dead_nested_drop, sizeof(dead_nested_drop), WASM_OK,
+                   "drop past floor in dead nested block valid");
+        check_result_body(0x7Fu, dead_nested_mismatch,
+                          sizeof(dead_nested_mismatch), WASM_OK,
+                          "mismatch in dead valued block valid");
+        check_body(dead_then_drop, sizeof(dead_then_drop), WASM_OK,
+                   "drop in dead then-branch valid");
+        check_body(dead_else_drop, sizeof(dead_else_drop), WASM_OK,
+                   "drop in dead else-branch valid");
+        check_body(dead_bad_label, sizeof(dead_bad_label),
+                   WASM_ERR_INVALID_LABEL, "bad label still rejected in dead code");
+        check_result_body(0x7Fu, live_mismatch, sizeof(live_mismatch),
+                          WASM_ERR_INVALID_TYPE, "live mismatch still rejected");
+        check_result_body(0x7Fu, live_wrong_result, sizeof(live_wrong_result),
+                          WASM_ERR_INVALID_TYPE, "live wrong result rejected");
+    }
     CHECK(validate_bytes(global_set_immutable, sizeof(global_set_immutable)) ==
           WASM_ERR_INVALID_GLOBAL, "immutable global.set");
     CHECK(validate_bytes(alignment_too_large, sizeof(alignment_too_large)) ==
