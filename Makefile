@@ -177,7 +177,7 @@ test12: $(T12)
 testcli: $(TCLI)
 	./$(TCLI)
 
-fuzz: $(FUZZ)
+fuzz-smoke: $(FUZZ)
 	./$(FUZZ) $(SEED) $(ITER)
 
 parity: $(RUNNER)
@@ -207,6 +207,93 @@ arm-cross: targets/stm32/demo_add_wasm.c $(ARM_OBJECTS)
 	$(ARM_CC) $(ARM_CFLAGS) targets/stm32/embedded_demo.c targets/stm32/demo_add_wasm.c \
 		$(ARM_BUILD)/libwasm_engine.a -specs=nosys.specs -Wl,--gc-sections,-Map=$(ARM_BUILD)/embedded_demo.map \
 		-o $(ARM_BUILD)/embedded_demo.elf -lm
+
+# ---- Phase 4: fuzzing ----------------------------------------------------
+# Harnesses live in fuzz/. Every buffer in the fuzz drivers is a static
+# array: the fuzz pipeline never allocates (invariant 1).
+FUZZ_BUILD    = $(BUILD)/fuzz
+FUZZ_CFLAGS   = -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -Ifuzz
+FUZZ_SRC      = $(SRC) fuzz/fuzz_pipeline.c
+FUZZ_CORPUS   = $(FUZZ_BUILD)/corpus
+FUZZ_RUNS     ?= 1000000
+FUZZ_MAX_LEN  ?= 65536
+MUT_ROUNDS    ?= 20
+FUZZ_TOOL     ?= $(shell sh tools/detect_fuzz_tool.sh 2>/dev/null || echo loop)
+ifeq ($(OS),Windows_NT)
+  FUZZ_MKDIR = if not exist $(FUZZ_BUILD) mkdir $(FUZZ_BUILD)
+  FUZZ_CORPUS_MKDIR = if not exist $(FUZZ_CORPUS) mkdir $(FUZZ_CORPUS)
+else
+  FUZZ_MKDIR = mkdir -p $(FUZZ_BUILD)
+  FUZZ_CORPUS_MKDIR = mkdir -p $(FUZZ_CORPUS)
+endif
+
+$(FUZZ_BUILD)/parse_harness: $(FUZZ_SRC) fuzz/fuzz_pipeline.c fuzz/parse_harness.c
+	$(FUZZ_MKDIR)
+	$(CC) $(FUZZ_CFLAGS) $(FUZZ_SRC) fuzz/parse_harness.c -o $@ $(LDLIBS)
+
+$(FUZZ_BUILD)/loop_driver: $(FUZZ_SRC) fuzz/fuzz_pipeline.c fuzz/loop_driver.c
+	$(FUZZ_MKDIR)
+	$(CC) $(FUZZ_CFLAGS) $(FUZZ_SRC) fuzz/loop_driver.c -o $@ $(LDLIBS)
+
+# Sanitized variant of the loop driver (used for the fuzzing runs).
+$(FUZZ_BUILD)/loop_driver_san: $(FUZZ_SRC) fuzz/fuzz_pipeline.c fuzz/loop_driver.c
+	$(FUZZ_MKDIR)
+	$(SAN_CC) $(FUZZ_CFLAGS) $(SAN_FLAGS) $(FUZZ_SRC) fuzz/loop_driver.c -o $@ $(LDLIBS)
+
+$(FUZZ_BUILD)/libfuzzer_parse: $(FUZZ_SRC) fuzz/fuzz_pipeline.c fuzz/libfuzzer_entry.c
+	$(FUZZ_MKDIR)
+	clang $(FUZZ_CFLAGS) $(SAN_FLAGS) -fsanitize=fuzzer $(FUZZ_SRC) \
+	      fuzz/libfuzzer_entry.c -o $@ $(LDLIBS)
+
+$(FUZZ_BUILD)/afl_parse: $(FUZZ_SRC) fuzz/fuzz_pipeline.c fuzz/afl_entry.c
+	$(FUZZ_MKDIR)
+	afl-clang-fast $(FUZZ_CFLAGS) $(FUZZ_SRC) fuzz/afl_entry.c -o $@ $(LDLIBS)
+
+fuzz-build: $(FUZZ_BUILD)/parse_harness $(FUZZ_BUILD)/loop_driver
+
+# Seed corpus: the demo modules plus a sample of the official spec corpus.
+fuzz-corpus: fuzz-build
+	$(FUZZ_CORPUS_MKDIR)
+	cp demo/*.wasm $(FUZZ_CORPUS)/ 2>/dev/null || true
+	@for f in $$(ls tests/spec/json/*.wasm 2>/dev/null | head -200); do \
+	    cp "$$f" $(FUZZ_CORPUS)/ 2>/dev/null || true; \
+	done
+
+# libFuzzer backend: the shared pipeline, seeded with the valid corpus.
+fuzz-libfuzzer: fuzz-corpus $(FUZZ_BUILD)/libfuzzer_parse
+	$(FUZZ_BUILD)/libfuzzer_parse $(FUZZ_CORPUS) -runs=$(FUZZ_RUNS) \
+	    -max_len=$(FUZZ_MAX_LEN) -timeout=25 -rss_limit_mb=4096 \
+	    -print_final_stats=1 -artifact_prefix=$(FUZZ_BUILD)/crash-
+
+# AFL++ backend (persistent mode).
+fuzz-afl: fuzz-corpus $(FUZZ_BUILD)/afl_parse
+	AFL_SKIP_CPUFREQ=1 afl-fuzz -i $(FUZZ_CORPUS) -o $(FUZZ_BUILD)/afl-out \
+	    -m none -t 25000 -- $(FUZZ_BUILD)/afl_parse
+
+# Deterministic loop backend (always available, seed printed by the driver).
+fuzz-loop: fuzz-build $(FUZZ_BUILD)/loop_driver_san
+	$(FUZZ_BUILD)/loop_driver_san $(SEED) $(ITER) demo/*.wasm
+
+# Backend detection: libFuzzer -> AFL++ -> deterministic loop.
+fuzz:
+	@echo "[fuzz] backend: $(FUZZ_TOOL)"
+	@case "$(FUZZ_TOOL)" in \
+	    libfuzzer) $(MAKE) fuzz-libfuzzer FUZZ_RUNS=$(FUZZ_RUNS) ;; \
+	    afl) $(MAKE) fuzz-afl ;; \
+	    *) $(MAKE) fuzz-loop SEED=$(SEED) ITER=$(ITER) ;; \
+	esac
+
+# Mutation driver: generate a mutant corpus from the valid modules and
+# (optionally) replay every mutant through the C pipeline.
+fuzz-mutate: fuzz-build
+	$(PYTHON) fuzz/mutate.py --out $(FUZZ_CORPUS) --rounds $(MUT_ROUNDS) \
+	    --runner $(FUZZ_BUILD)/parse_harness
+
+# Hard invariant 1: no dynamic allocation anywhere in the tree.
+no-alloc-check:
+	sh tools/check_no_alloc.sh
+
+.PHONY: fuzz-build fuzz-corpus fuzz-libfuzzer fuzz-afl fuzz-loop fuzz fuzz-mutate no-alloc-check
 
 # ---- Phase 4: sanitizer builds -------------------------------------------
 # Sanitizer toolchain: prefer clang when it is installed (it also provides
