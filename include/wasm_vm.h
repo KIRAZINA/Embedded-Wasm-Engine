@@ -54,6 +54,12 @@ typedef struct {
     uint8_t param_types[WASM_MAX_LOCALS_PER_FRAME];
     uint8_t return_type;
     int has_sig;
+    /* Phase 5: declared types of the function's own locals (valtype
+     * bytes, local_types[0] is the first *declared* local, i.e. after
+     * the parameters). The VM uses them to initialize a local with the
+     * right type: an f32 local defaults to +0.0f, not to an i32 zero. */
+    uint8_t local_types[WASM_MAX_LOCALS_PER_FRAME];
+    uint32_t local_type_count;
 } wasm_func_desc_t;
 
 /* Global instance: committed value plus mutability. Index space after
@@ -123,12 +129,21 @@ wasm_trap_t wasm_vm_define_function(wasm_vm_t *vm, uint32_t func_idx,
                                     uint32_t return_count,
                                     const uint8_t *code, size_t code_len);
 
-/* Phase 6: native-callback registration. OP_CALL on such an index pops
+/* Phase 5: native-callback registration. OP_CALL on such an index pops
  * param_count values, invokes cb, and pushes return_count results. */
 wasm_trap_t wasm_vm_define_host_function(wasm_vm_t *vm, uint32_t func_idx,
                                          uint32_t param_count,
                                          uint32_t return_count,
                                          wasm_host_func_t cb);
+
+/* Phase 5: record the declared types of a function's own locals.
+ * `types` holds `count` valtype bytes (0x7F i32, 0x7E i64, 0x7D f32,
+ * 0x7C f64) in declaration order; the parameters are not included.
+ * The linker calls this after wasm_vm_define_function so that an
+ * uninitialized local is created with its declared type (an f32 local
+ * starts at +0.0f, an i64 local at 0) instead of an i32 zero. */
+wasm_trap_t wasm_vm_set_local_types(wasm_vm_t *vm, uint32_t func_idx,
+                                    const uint8_t *types, uint32_t count);
 
 #ifdef __cplusplus
 }

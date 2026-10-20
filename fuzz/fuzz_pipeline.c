@@ -174,8 +174,11 @@ int wasm_fuzz_pipeline(const uint8_t *data, size_t len)
     /* 4. instantiation */
     (void)wasm_vm_init(&g_vm);
     (void)wasm_host_registry_init(&g_reg);
-    if (wasm_memory_init(&g_mem, g_arena, (uint32_t)sizeof(g_arena), 0u,
-                         FUZZ_MEM_PAGES) != WASM_TRAP_OK) {
+    /* One visible page (initial == max): the memory must really have the
+     * page, otherwise every module with a data segment is rejected with
+     * DATA_OUT_OF_BOUNDS and the data path is never executed. */
+    if (wasm_memory_init(&g_mem, g_arena, (uint32_t)sizeof(g_arena),
+                         FUZZ_MEM_PAGES, FUZZ_MEM_PAGES) != WASM_TRAP_OK) {
         return stages;
     }
     if (wasm_vm_bind_memory(&g_vm, &g_mem) != WASM_TRAP_OK) {

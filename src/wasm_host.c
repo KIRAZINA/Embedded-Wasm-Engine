@@ -1421,6 +1421,8 @@ wasm_err_t wasm_instantiate(wasm_vm_t *vm, const wasm_module_t *mod,
             uint64_t locals_total = 0u;
             uint32_t pc = 0u, rcnt = 0u;
             uint8_t ptypes[WASM_MAX_LOCALS_PER_FRAME];
+            uint8_t ltypes[WASM_MAX_LOCALS_PER_FRAME];
+            uint32_t ltype_count = 0u;
             uint8_t rtype = 0u;
             uint32_t q;
             wasm_trap_t tr;
@@ -1457,6 +1459,18 @@ wasm_err_t wasm_instantiate(wasm_vm_t *vm, const wasm_module_t *mod,
                 if (locals_total > (uint64_t)WASM_MAX_LOCALS_PER_FRAME) {
                     return WASM_ERR_TYPE_MISMATCH_IMPORT; /* beyond engine */
                 }
+                /* Keep the declared types: the VM initializes an
+                 * uninitialized local with them (an f32 local starts at
+                 * +0.0f, not at an i32 zero). */
+                {
+                    uint32_t k;
+                    for (k = 0u; k < cnt; k++) {
+                        if (ltype_count >= (uint32_t)WASM_MAX_LOCALS_PER_FRAME) {
+                            return WASM_ERR_TYPE_MISMATCH_IMPORT;
+                        }
+                        ltypes[ltype_count++] = vt;
+                    }
+                }
             }
             code = body;
             code_len = (size_t)(body_end - body);
@@ -1487,6 +1501,14 @@ wasm_err_t wasm_instantiate(wasm_vm_t *vm, const wasm_module_t *mod,
             vm->funcs[nimports + i].return_type =
                 (rcnt > 0u) ? rtype : 0u;
             vm->funcs[nimports + i].has_sig = 1;
+            /* Declared local types (Phase 5): the VM creates an
+             * uninitialized local with its declared type. */
+            tr = wasm_vm_set_local_types(vm, nimports + i, ltypes,
+                                         ltype_count);
+            if (tr != WASM_TRAP_OK) {
+                return (tr == WASM_TRAP_NULL) ? WASM_ERR_NULL
+                                              : WASM_ERR_TYPE_MISMATCH_IMPORT;
+            }
         }
         if (has_code && cur != end) {
             return WASM_ERR_INVALID_SECTION; /* trailing bytes */

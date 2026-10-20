@@ -1,0 +1,3 @@
+qsort_demo: result: 3286 (i32)
+matmul_f32: result: 22.125 (f32)
+crc32_demo: result: 1157425541 (i32)

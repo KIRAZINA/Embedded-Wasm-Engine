@@ -109,10 +109,21 @@ wasm_trap_t wasm_vm_enter_function(wasm_vm_t *vm, uint32_t func_idx,
     for (i = 0u; i < param_count; i++) {
         frame.locals[i] = tmp[i];
     }
-    /* Zero-init declared locals: deterministic I32 zero. */
-    for (i = param_count; i < total; i++) {
-        frame.locals[i].type = WASM_TYPE_I32;
-        frame.locals[i].value.i32 = 0;
+    /* Zero-init declared locals with their DECLARED type: an f32 local
+     * starts at +0.0f, an f64 local at +0.0, an i64 local at 0. Using
+     * the i32 type for every local would trap a program that reads an
+     * uninitialized f32 local (real clang output does exactly that). */
+    {
+        const wasm_func_desc_t *desc = &vm->funcs[func_idx];
+        for (i = param_count; i < total; i++) {
+            uint32_t li = i - param_count;
+            uint8_t vt = (uint8_t)WASM_TYPE_I32;
+            if (li < desc->local_type_count) {
+                vt = desc->local_types[li];
+            }
+            frame.locals[i].type = (wasm_valtype_t)vt;
+            frame.locals[i].value.i64 = 0; /* zero bits: 0, +0.0f, +0.0 */
+        }
     }
 
     return wasm_call_stack_push(&vm->calls, &frame);
@@ -3125,6 +3136,26 @@ wasm_trap_t wasm_vm_run(wasm_vm_t *vm)
             return tr;
         }
     }
+}
+
+wasm_trap_t wasm_vm_set_local_types(wasm_vm_t *vm, uint32_t func_idx,
+                                    const uint8_t *types, uint32_t count)
+{
+    uint32_t i;
+    if (vm == NULL || (types == NULL && count > 0u)) {
+        return WASM_TRAP_NULL;
+    }
+    if (func_idx >= (uint32_t)WASM_MAX_FUNCTIONS) {
+        return WASM_TRAP_INVALID_ARGUMENT;
+    }
+    if (count > (uint32_t)WASM_MAX_LOCALS_PER_FRAME) {
+        return WASM_TRAP_INVALID_LOCAL_INDEX;
+    }
+    for (i = 0u; i < count; i++) {
+        vm->funcs[func_idx].local_types[i] = types[i];
+    }
+    vm->funcs[func_idx].local_type_count = count;
+    return WASM_TRAP_OK;
 }
 
 wasm_trap_t wasm_vm_define_function(wasm_vm_t *vm, uint32_t func_idx,
