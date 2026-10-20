@@ -51,13 +51,21 @@ for wast in "$UPSTREAM/test/core"/*.wast; do
     basename="$(basename "$wast" .wast)"
     out_json="$OUTDIR/$basename.json"
     # wast2json writes $basename.json + $basename.N.wasm beside it.
-    # To keep outputs contained in OUTDIR we run from OUTDIR with the input path.
-    (cd "$OUTDIR" && "$WAST2JSON" --enable-all "$wast" -o "$basename.json") || {
+    # To keep outputs contained in OUTDIR we run from OUTDIR, so the
+    # input path must be absolute (a relative one would break after
+    # the change of directory).
+    wast_abs="$(cd "$(dirname "$wast")" && pwd)/$(basename "$wast")"
+    (cd "$OUTDIR" && "$WAST2JSON" --enable-all "$wast_abs" -o "$basename.json") || {
         echo "WARNING: conversion failed for $basename" >&2
         continue
     }
     count=$((count+1))
 done
+
+if [ "$count" -eq 0 ]; then
+    echo "ERROR: no .wast file was converted (wast2json: $WAST2JSON)" >&2
+    exit 1
+fi
 
 echo "Converted $count .wast files into $OUTDIR/"
 echo "Binaries (.wasm) are gitignored; script committed so CI can reproduce."
