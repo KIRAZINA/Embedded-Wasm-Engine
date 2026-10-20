@@ -70,15 +70,15 @@ typedef struct {
 typedef struct {
     uint8_t kind;   /* 0 block, 1 loop, 2 if */
     uint8_t result; /* V_BLOCK_VOID or MVP valtype byte */
+    uint8_t unreachable;
+    uint8_t has_else;
     uint32_t height;
-    int unreachable;
-    int has_else;
 } vctrl_t;
 
 typedef struct {
     uint8_t vs[WASM_VALIDATE_STACK_MAX];
     uint32_t vtop;
-    vctrl_t cs[WASM_MAX_CONTROL_STACK_DEPTH];
+    vctrl_t cs[WASM_MAX_CTRL_NESTING];
     uint32_t cdepth;
     int func_unreachable;
     uint8_t locals[WASM_MAX_LOCALS_PER_FRAME];
@@ -333,7 +333,7 @@ static wasm_err_t vopen_block(validator_t *v, uint8_t kind, uint8_t result,
     /* Capture the enclosing unreachability BEFORE pushing: afterwards the
      * top frame is the new one itself. */
     int parent_dead = vunreach(v);
-    if (v->cdepth >= (uint32_t)WASM_MAX_CONTROL_STACK_DEPTH) {
+    if (v->cdepth >= (uint32_t)WASM_MAX_CTRL_NESTING) {
         return WASM_ERR_INVALID_BLOCK;
     }
     f = &v->cs[v->cdepth++];
@@ -2009,24 +2009,33 @@ wasm_err_t wasm_validate_module(const wasm_module_t *mod)
         uint32_t nfuncs = mc.nimports + mc.ndefined;
         cur = elemp.data;
         end = elemp.data + elemp.len;
+        /* An element segment needs a table to exist ("unknown table"). */
+        if (!has_table) {
+            return WASM_ERR_INVALID_SECTION;
+        }
         rc = leb128_decode_u32(&cur, end, &count);
         if (rc != WASM_OK) {
             return rc;
         }
         for (i = 0u; i < count; i++) {
-            uint32_t flags = 0u, tableidx = 0u, len = 0u, k;
+            uint32_t form = 0u, tableidx = 0u, len = 0u, k;
             uint8_t it;
             int is_ref = 0;
-            /* Segment flags: 0 = active on table 0 (tableidx, offset,
-             * funcref vec); 2 = active with explicit tableidx (must be 0)
-             * and elemkind (must be 0x00 funcref); 4 = active on table 0
-             * with `ref.func` init-expr elements. Passive/declared/GC
-             * reftypes (1, 3, 5+) need post-MVP features: reject. */
-            rc = leb128_decode_u32(&cur, end, &flags);
-            if (rc != WASM_OK) {
-                return rc;
+            /* Standard segment encoding (section 5.5.12): form 0x00 =
+             * active on table 0 (offset expr, funcref vec); 0x02 = active
+             * with explicit tableidx (must be 0) and elemkind (0x00
+             * funcref); 0x04 = active on table 0 with `ref.func` init-expr
+             * elements; 0x06 = active with tableidx and reftype 0x70.
+             * Passive/declarative forms (1, 3, 5, 7) need post-MVP
+             * features: reject. */
+            if (!vreadable(cur, end, 1u)) {
+                return WASM_ERR_TRUNCATED;
             }
-            if (flags == 0u || flags == 2u) {
+            form = *cur++;
+            if (form == 0u || form == 4u) {
+                tableidx = 0u; /* form implies table 0 */
+                is_ref = (form == 4u) ? 1 : 0;
+            } else if (form == 2u || form == 6u) {
                 rc = leb128_decode_u32(&cur, end, &tableidx);
                 if (rc != WASM_OK) {
                     return rc;
@@ -2034,8 +2043,7 @@ wasm_err_t wasm_validate_module(const wasm_module_t *mod)
                 if (tableidx != 0u) {
                     return WASM_ERR_INVALID_SECTION;
                 }
-            } else if (flags == 4u) {
-                is_ref = 1;
+                is_ref = (form == 6u) ? 1 : 0;
             } else {
                 return WASM_ERR_INVALID_SECTION;
             }
@@ -2046,13 +2054,22 @@ wasm_err_t wasm_validate_module(const wasm_module_t *mod)
             if (it != (uint8_t)WASM_TYPE_I32) {
                 return WASM_ERR_INVALID_SECTION;
             }
-            if (flags == 2u) {
+            if (form == 2u) {
                 uint8_t elemkind;
                 if (!vreadable(cur, end, 1u)) {
                     return WASM_ERR_TRUNCATED;
                 }
                 elemkind = *cur++;
                 if (elemkind != 0x00u) {
+                    return WASM_ERR_INVALID_SECTION;
+                }
+            } else if (form == 6u) {
+                uint8_t reftype;
+                if (!vreadable(cur, end, 1u)) {
+                    return WASM_ERR_TRUNCATED;
+                }
+                reftype = *cur++;
+                if (reftype != 0x70u) {
                     return WASM_ERR_INVALID_SECTION;
                 }
             }

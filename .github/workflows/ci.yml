@@ -60,12 +60,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install compiler and tools
         run: sudo apt-get update && sudo apt-get install -y make ${{ matrix.cc }}
-      - name: Sanitized build and tests
-        run: >-
-          make CC=${{ matrix.cc }}
-          CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude
-          -fsanitize=address,undefined -fno-sanitize-recover=all"
-          all test
+      - name: Sanitized build, tests and spec smoke
+        run: make CC=${{ matrix.cc }} sanitizers
+
+  no-alloc:
+    name: zero dynamic allocation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check for allocation calls
+        run: make no-alloc-check
 
   fuzz-smoke:
     name: fuzz smoke
@@ -75,7 +79,19 @@ jobs:
       - name: Install compiler and tools
         run: sudo apt-get update && sudo apt-get install -y make gcc
       - name: Run deterministic fuzz smoke
-        run: make CC=gcc fuzz SEED=42 ITER=200000
+        run: make CC=gcc fuzz-smoke SEED=42 ITER=200000
+
+  fuzz-harness:
+    name: fuzz harness (mutation driver, sanitizers)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler and tools
+        run: sudo apt-get update && sudo apt-get install -y make gcc clang
+      - name: Deterministic mutation run under ASan+UBSan
+        run: make CC=gcc fuzz-loop SEED=42 ITER=200000
+      - name: Corpus mutation driver
+        run: make CC=gcc fuzz-mutate MUT_ROUNDS=2
 
   cross-arm:
     name: Cortex-M4 cross build

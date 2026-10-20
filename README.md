@@ -14,7 +14,7 @@ anywhere**, verified by audit. All builds are warning-free under
 - **Binary parser** — magic/version validation, zero-copy section traversal,
   full LEB128 (`u32`/`u64`/`s32`/`s64`) with overflow and truncation guards.
 - **Execution core** — `switch`-dispatched interpreter over an operand stack,
-  call stack, and per-frame control stack.
+  call stack, and one shared structured-control pool (bounded nesting).
 - **Integer core** — complete i32 ALU (add/sub/mul/div/rem, bitwise ops,
   `%32`-masked shifts with portable arithmetic `shr_s`, all comparisons),
   plus the full i64 ALU (`%64`-masked shifts, `INT64_MIN/-1` trapping).
@@ -239,8 +239,10 @@ core build.
 ```sh
 make
 make test
-make fuzz SEED=7 ITER=1000000
-make sanitize
+make no-alloc-check
+make fuzz-smoke SEED=7 ITER=1000000
+make sanitizers          # asan + ubsan build, unit suite and spec smoke
+make fuzz                 # libFuzzer -> AFL++ -> deterministic loop
 ```
 
 The optional spec harness uses Python 3 standard-library code and user-supplied
@@ -268,10 +270,34 @@ validation failure exits 1 with `error: validation: NAME` on stderr.
 
 ## Conformance and fuzz tooling
 
-`make fuzz SEED=1 ITER=1000000` runs the deterministic in-repo smoke fuzzer.
-`make sanitize` builds the runner, all tests, and the fuzzer with AddressSanitizer
-and UndefinedBehaviorSanitizer, then runs the suite and one-million-iteration
-fuzz pass. The sanitizer runtimes must be provided by the selected C toolchain.
+`make fuzz-smoke SEED=1 ITER=1000000` runs the deterministic in-repo smoke
+fuzzer.
+
+`make asan`, `make ubsan` and `make sanitizers` build the runner, every
+test and the fuzz harnesses with AddressSanitizer (and/or
+UndefinedBehaviorSanitizer, `-fno-sanitize-recover=all`) into their own
+build tree, then run the full unit suite and three representative spec
+suites (`f32`, `memory_trap`, `traps`) through a sanitized runner. The
+sanitizer runtimes must be provided by the selected C toolchain; clang is
+preferred when installed, gcc otherwise, and `CC=clang` / `CC=gcc` forces
+one.
+
+`make fuzz` picks a fuzzing backend automatically and prints it:
+
+1. **libFuzzer** (`clang -fsanitize=fuzzer`, target `fuzz-libfuzzer`),
+2. **AFL++** (`afl-clang-fast`, target `fuzz-afl`),
+3. **deterministic seeded loop** (`fuzz-loop`): a mutation driver over the
+   valid corpus that prints its seed, so a run can be replayed exactly.
+
+`make fuzz-mutate` runs the Python corpus driver (`fuzz/mutate.py`): it
+harvests `demo/*.wasm` plus the official spec corpus, generates mutants
+(bit flips, truncation, section-size corruption, random byte overwrite,
+header corruption), replays them through the C pipeline and minimizes any
+crash it finds. `make no-alloc-check` verifies mechanically that no engine,
+test or fuzz source calls a dynamic allocation API.
+
+The fuzzers and the shared pipeline live in `fuzz/`; all of their buffers
+are static, so the fuzz drivers allocate nothing either.
 
 The spec harness is `tools/run_spec_suite.py` and uses only Python 3's standard
 library. The user supplies `.wast` conversions; no binaries are bundled. A
@@ -285,12 +311,12 @@ the run. Unsupported JSON command forms are counted as skips and reported.
 
 Conformance evidence in this checkout is bounded by the absence of bundled
 `.json` inputs: the curated run reports 0 executed assertions and 23 skipped
-files until the user supplies conversions. The deterministic smoke fuzzer
-completed 1,000,000 iterations with seed 1 (`parsed=499288`,
-`instantiated=51985`, `executed=19112`) without crashes. Sanitizer execution
-requires a compiler runtime providing ASan and UBSan; the reference MinGW
-host does not provide those libraries, while the committed Ubuntu CI jobs use
-native GCC and Clang sanitizer runtimes.
+files until the user supplies conversions. `PHASE4_REPORT.md` records the
+measured fuzzing campaign (5,000,000 libFuzzer executions and 2,000,000
+mutation-loop iterations under ASan+UBSan, no crashes) and the spec-suite
+numbers. Sanitizer execution requires a compiler runtime providing ASan and
+UBSan; the reference MinGW host does not provide those libraries, while the
+committed Ubuntu CI jobs use native GCC and Clang sanitizer runtimes.
 
 ```
 # [load] 126 bytes from 'demo\hello.wasm'
@@ -348,11 +374,15 @@ compile-time assertion that `sizeof(wasm_vm_t)` fits the documented 112 KiB
 STM32F4 VM budget. On the reference MinGW build this is:
 
 ```
-wasm_vm_t=105008 bytes
+wasm_vm_t=80960 bytes
 wasm_host_registry_t=3584 bytes
 wasm_memory_t=24 bytes
-engine_static_footprint=108616 bytes
+engine_static_footprint=84568 bytes
 ```
+
+(The structured-control pool shared by all call frames made the VM
+~24 KiB *smaller* than before while raising the accepted nesting depth
+from 32 to 1024 — see `LIMITS.md`.)
 
 For ESP32 and ESP32-C3, see [targets/esp32/README.md](targets/esp32/README.md)
 for the exact ESP-IDF component setup and `idf.py` commands. The component
@@ -362,23 +392,24 @@ static memory arena and host bindings.
 ## Testing
 
 Standalone `assert`-style suites, no test framework. Current status:
-**1599/1599 passing, 0 failed** (`make test` prints `TOTAL: 1599 passed, 0 failed`).
+**2024/2024 passing, 0 failed** (`make test` prints `TOTAL: 2024 passed, 0 failed`).
 
 | Suite | Coverage | Checks |
 |---|---|---|
 | `test_phase1` | LEB128 vectors/overflow/truncation, header + section parsing | 58 |
 | `test_phase2` | Stack push/pop/peek, overflow/underflow, LE memory round-trips, OOB + wraparound, page grow | 100 |
 | `test_phase3` | Frames, call stack, enter/exit, locals, height restoration | 137 |
-| `test_phase4` | i32 ALU, div-by-zero, `MIN/-1`, shifts, comparisons, load/store | 137 |
-| `test_phase5` | blocks/loops/branches, factorial, `call`/`return` interop | 74 |
-| `test_phase6` | Host callbacks, export lookup, import binding, instantiation, i64 ALU, CLI `--dump` output | 160 |
-| `test_cli` | End-to-end runner runs of hand-built `()->i64` modules, exact `result:` rendering incl. `INT64_MIN` | 15 |
+| `test_phase4` | i32 ALU, div-by-zero, `MIN/-1`, shifts, comparisons, load/store | 379 |
+| `test_phase5` | blocks/loops/branches, factorial, `call`/`return` interop, control-pool bounds | 80 |
+| `test_phase6` | Host callbacks, export lookup, import binding, instantiation, i64 ALU, CLI `--dump` output | 164 |
+| `test_cli` | End-to-end runner runs of hand-built `()->i64` modules, exact `result:` rendering incl. `INT64_MIN` | 31 |
 | `test_phase10` | Table/element validation, indirect dispatch/bounds/unset/signature matrix, host indirect, recursion, overwrite/reset/scanner, CLI dispatch2 run | 150 |
 | `test_phase9` | Global get/set/immutability/init forms/imports, data placement/bounds/caps, start run-once/rejects/host-start, register validation, CLI hello run | 200 |
-| `test_phase8` | br_table all-arms/default/unsigned-index/loop-target/valued-carry/malformed/scanner, select over 4 types incl. NaN/mismatch/underflow, CLI dispatch run | 102 |
-| `test_phase7` | f32/f64 const/arith/sqrt/min-max/abs-neg-copysign/round/nearest/cmp, all 8 trunc boundaries, converts, reinterprets, NaN propagation, memory NaN round-trips, CLI f32 run + dump | 357 |
-| `test_phase11` | static module validation corpus | 102 |
-| `test_phase12` | conformance/fuzz tooling helpers | 7 |
+| `test_phase8` | br_table all-arms/default/unsigned-index/loop-target/valued-carry/malformed/scanner, select over 4 types incl. NaN/mismatch/underflow, CLI dispatch run | 118 |
+| `test_phase7` | f32/f64 const/arith/sqrt/min-max/abs-neg-copysign/round/nearest/cmp, all 8 trunc boundaries, converts, reinterprets, NaN propagation, memory NaN round-trips, CLI f32 run + dump | 371 |
+| `test_phase11` | static module validation corpus | 205 |
+| `test_phase12` | conformance/fuzz tooling helpers | 8 |
+| `test_phase13` | control-nesting limit (validator + interpreter), shared control pool, branch-scan budget | 23 |
 
 ## Architecture
 
@@ -392,8 +423,8 @@ Standalone `assert`-style suites, no test framework. Current status:
   little-endian shift/mask, so parsing is endianness-independent.
 - `wasm_stack` / `wasm_frame` / `wasm_control`: fixed-capacity operand
   stack (1024 slots), call stack (64 frames, 32 embedded locals each),
-  per-frame control stack (32 entries). Overflow/underflow are trap values,
-  never crashes.
+  and one shared control pool (1024 entries) that every call frame owns
+  a window of. Overflow/underflow are trap values, never crashes.
 - `wasm_vm`: fetch/decode/execute loop; typed operand pops; subtractions-form
   bounds checks (`offset > total - size`, computed in 64 bits) defeat
   wraparound attacks.

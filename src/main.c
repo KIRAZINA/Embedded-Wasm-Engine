@@ -24,6 +24,7 @@
 
 #include "leb128.h"
 #include "version.h"
+#include "wasm_control.h"
 #include "wasm_host.h"
 #include "wasm_parser.h"
 #include "wasm_validate.h"
@@ -606,6 +607,8 @@ static void session_invoke(const char *export_name, uint32_t nargs,
     wasm_trap_t tr;
     uint32_t fidx = 0u, i;
     uint32_t budget = RUNNER_STEP_BUDGET;
+    uint64_t scan_cursor = 0u;
+    uint32_t charge = 0u;
     wasm_val_t res;
     wasm_slice_t pay;
 
@@ -620,6 +623,14 @@ static void session_invoke(const char *export_name, uint32_t nargs,
         printf("INVOKE_ERROR %s\n", wasm_trap_str(tr));
         return;
     }
+    /* The structured-control pool is per invocation as well: a trapped
+     * invocation must not leave frames behind for the next one. */
+    tr = wasm_control_pool_init(&s_vm.ctrl_pool);
+    if (tr != WASM_TRAP_OK) {
+        printf("INVOKE_ERROR %s\n", wasm_trap_str(tr));
+        return;
+    }
+    s_vm.scan_bytes = 0u;
     if (!s_have_mod) {
         printf("INVOKE_ERROR no-module\n");
         return;
@@ -699,6 +710,13 @@ static void session_invoke(const char *export_name, uint32_t nargs,
             }
             budget--;
             tr = wasm_vm_step(&s_vm);
+            /* Phase 4: charge scanned branch-target bytes to the budget. */
+            charge = wasm_vm_scan_charge(&s_vm, &scan_cursor);
+            if (charge > budget) {
+                budget = 0u;
+            } else {
+                budget -= charge;
+            }
         }
         if (tr != WASM_TRAP_OK) {
             printf("RESULT trap %s\n", wasm_trap_str(tr));
@@ -852,6 +870,8 @@ int main(int argc, char **argv)
     int mem_present = 0;
     uint64_t need;
     uint32_t budget = RUNNER_STEP_BUDGET;
+    uint64_t scan_cursor = 0u;
+    uint32_t charge = 0u;
     wasm_val_t res;
     wasm_val_t cli_args[WASM_MAX_LOCALS_PER_FRAME];
     uint32_t cli_nargs = 0u;
@@ -1153,6 +1173,15 @@ int main(int argc, char **argv)
             }
             budget--;
             tr = wasm_vm_step(&g_vm);
+            /* Phase 4: bytes scanned while resolving a branch target
+             * cost extra budget steps, so one VM step can never cost
+             * more than a bounded amount of work. Semantics unchanged. */
+            charge = wasm_vm_scan_charge(&g_vm, &scan_cursor);
+            if (charge > budget) {
+                budget = 0u;
+            } else {
+                budget -= charge;
+            }
         }
         if (tr != WASM_TRAP_OK) {
             if (g_result_line) printf("RESULT trap %s\n", wasm_trap_str(tr));

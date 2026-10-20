@@ -969,11 +969,19 @@ static wasm_err_t apply_data(wasm_vm_t *vm, const wasm_slice_t *datap,
     return WASM_OK;
 }
 
-/* Parse one element segment header: flags 0 (tableidx, offset, funcref
- * vec), flags 2 (tableidx, offset, elemkind 0x00, funcref vec), or
- * flags 4 (offset, vec of `ref.func idx end` init exprs). Table 0 and an
- * i32 offset are required throughout; anything else is INVALID_SECTION.
- * *out_ref is 1 for flags 4 (elements are triples, not plain ULEBs).
+/* Parse one element segment header using the standard binary encoding
+ * (WebAssembly 1.0 + bulk memory, section 5.5.12):
+ *   form 0x00 : active, table 0, offset expr, vec(funcidx)
+ *   form 0x02 : active, tableidx, offset expr, elemkind 0x00, vec(funcidx)
+ *   form 0x04 : active, table 0, offset expr, vec(`ref.func idx end`)
+ *   form 0x06 : active, tableidx, offset expr, reftype 0x70, vec(expr)
+ * The legacy MVP encoding (tableidx, offset expr, vec(funcidx)) is
+ * byte-identical to form 0x00 for the single MVP table, so both are
+ * accepted. Passive/declarative forms (0x01/0x03/0x05/0x07) are not
+ * supported by this MVP engine -> INVALID_SECTION.
+ * Table 0 and an i32 offset are required throughout.
+ * *out_ref is 1 for the expression forms (0x04/0x06); elements are then
+ * `ref.func idx end` triples, not plain ULEBs.
  * The funcidx vector is NOT consumed here; callers walk it with
  * parse_elem_entry (pass 1 validates, pass 2 writes). */
 static wasm_err_t parse_elem_seg(const uint8_t **pp, const uint8_t *end,
@@ -981,16 +989,19 @@ static wasm_err_t parse_elem_seg(const uint8_t **pp, const uint8_t *end,
                                  uint32_t *out_offset, uint32_t *out_len,
                                  int *out_ref)
 {
-    uint32_t flags = 0u, tableidx = 0u, len = 0u;
+    uint32_t form = 0u, tableidx = 0u, len = 0u;
     wasm_val_t off;
     wasm_err_t rc;
     off.type = WASM_TYPE_I32;
     off.value.i32 = 0;
-    rc = leb128_decode_u32(pp, end, &flags);
-    if (rc != WASM_OK) {
-        return rc;
+    if (!readable(*pp, end, 1u)) {
+        return WASM_ERR_TRUNCATED;
     }
-    if (flags == 0u || flags == 2u) {
+    form = *(*pp)++;
+    if (form == 0u || form == 4u) {
+        tableidx = 0u; /* form implies table 0 */
+        *out_ref = (form == 4u) ? 1 : 0;
+    } else if (form == 2u || form == 6u) {
         rc = leb128_decode_u32(pp, end, &tableidx);
         if (rc != WASM_OK) {
             return rc;
@@ -998,11 +1009,9 @@ static wasm_err_t parse_elem_seg(const uint8_t **pp, const uint8_t *end,
         if (tableidx != 0u) {
             return WASM_ERR_INVALID_SECTION; /* MVP has exactly one table */
         }
-        *out_ref = 0;
-    } else if (flags == 4u) {
-        *out_ref = 1;
+        *out_ref = (form == 6u) ? 1 : 0;
     } else {
-        return WASM_ERR_INVALID_SECTION;
+        return WASM_ERR_INVALID_SECTION; /* passive/declarative unsupported */
     }
     rc = eval_init_expr(pp, end, vm->globals, nimportglobals, &off);
     if (rc != WASM_OK) {
@@ -1011,13 +1020,22 @@ static wasm_err_t parse_elem_seg(const uint8_t **pp, const uint8_t *end,
     if (off.type != WASM_TYPE_I32) {
         return WASM_ERR_INVALID_SECTION; /* offset must evaluate to i32 */
     }
-    if (flags == 2u) {
+    if (form == 2u) {
         uint8_t elemkind;
         if (!readable(*pp, end, 1u)) {
             return WASM_ERR_TRUNCATED;
         }
         elemkind = *(*pp)++;
         if (elemkind != 0x00u) {
+            return WASM_ERR_INVALID_SECTION; /* funcref only */
+        }
+    } else if (form == 6u) {
+        uint8_t reftype;
+        if (!readable(*pp, end, 1u)) {
+            return WASM_ERR_TRUNCATED;
+        }
+        reftype = *(*pp)++;
+        if (reftype != 0x70u) {
             return WASM_ERR_INVALID_SECTION; /* funcref only */
         }
     }
@@ -1550,8 +1568,13 @@ wasm_err_t wasm_instantiate(wasm_vm_t *vm, const wasm_module_t *mod,
     }
 
     /* 7b. Element segments into the table (same no-partial policy).
-     * Needs function linking done (funcidx validated against the total). */
+     * Needs function linking done (funcidx validated against the total).
+     * An element segment requires a table: without one the module is
+     * invalid ("unknown table"), not silently ignored. */
     if (has_elem) {
+        if (!has_table) {
+            return WASM_ERR_INVALID_SECTION;
+        }
         rc = apply_elements(vm, &elemp, nimportglobals, nimports + ndefined);
         if (rc != WASM_OK) {
             return rc;

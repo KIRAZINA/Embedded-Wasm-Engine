@@ -26,6 +26,11 @@ wasm_trap_t wasm_vm_init(wasm_vm_t *vm)
     if (tr != WASM_TRAP_OK) {
         return tr;
     }
+    tr = wasm_control_pool_init(&vm->ctrl_pool);
+    if (tr != WASM_TRAP_OK) {
+        return tr;
+    }
+    vm->scan_bytes = 0u;
     vm->mem = NULL;
     for (i = 0u; i < (uint32_t)WASM_MAX_FUNCTIONS; i++) {
         uint32_t k;
@@ -100,7 +105,7 @@ wasm_trap_t wasm_vm_enter_function(wasm_vm_t *vm, uint32_t func_idx,
     frame.return_count = return_count;
     frame.code_ptr = NULL;
     frame.code_end = NULL;
-    (void)wasm_control_stack_init(&frame.ctrl); /* fresh frame: no open blocks */
+    (void)wasm_control_stack_init(&frame.ctrl, &vm->ctrl_pool); /* fresh window at the pool top */
     for (i = 0u; i < param_count; i++) {
         frame.locals[i] = tmp[i];
     }
@@ -156,7 +161,9 @@ wasm_trap_t wasm_vm_exit_function(wasm_vm_t *vm, uint32_t return_count)
         return WASM_TRAP_STACK_OVERFLOW;
     }
 
-    /* Commit: truncate garbage, re-push the result, drop the frame. */
+    /* Commit: truncate garbage, re-push the result, drop the frame.
+     * The frame's control window is released with it: the pool top
+     * falls back to the window base, so the caller's blocks stay live. */
     vm->operands.top = top->stack_base_ptr;
     if (have_ret) {
         tr = wasm_stack_push(&vm->operands, ret);
@@ -164,6 +171,7 @@ wasm_trap_t wasm_vm_exit_function(wasm_vm_t *vm, uint32_t return_count)
             return tr; /* unreachable: capacity pre-checked above */
         }
     }
+    vm->ctrl_pool.depth = top->ctrl.base;
     return wasm_call_stack_pop(&vm->calls, NULL);
 }
 
@@ -764,10 +772,10 @@ static wasm_trap_t vm_store_ea(wasm_vm_t *vm, int32_t base, uint32_t offset,
  * *out_end is the first byte past the final END. Unknown bytes make the
  * length unknowable -> UNKNOWN_OPCODE; running out -> CODE_OVERRUN.
  */
-static wasm_trap_t vm_scan_block(const uint8_t *from, const uint8_t *end,
-                                 uint32_t levels,
-                                 const uint8_t **out_else,
-                                 const uint8_t **out_end)
+static wasm_trap_t vm_scan_block_raw(const uint8_t *from, const uint8_t *end,
+                                     uint32_t levels,
+                                     const uint8_t **out_else,
+                                     const uint8_t **out_end)
 {
     const uint8_t *p = from;
     const uint8_t *found_else = NULL;
@@ -1054,6 +1062,30 @@ static wasm_trap_t vm_scan_block(const uint8_t *from, const uint8_t *end,
 }
 
 /*
+ * Scan wrapper: counts the bytes the scan consumed so the host can
+ * charge them against its step budget (Phase 4 hardening). The scan
+ * stops right after the matching END, so *out_end - from is exactly
+ * the number of bytes inspected.
+ */
+static wasm_trap_t vm_scan_block(wasm_vm_t *vm, const uint8_t *from,
+                                 const uint8_t *end, uint32_t levels,
+                                 const uint8_t **out_else,
+                                 const uint8_t **out_end)
+{
+    wasm_trap_t tr;
+
+    if (vm == NULL) {
+        return WASM_TRAP_NULL;
+    }
+    tr = vm_scan_block_raw(from, end, levels, out_else, out_end);
+    if (tr == WASM_TRAP_OK && out_end != NULL && *out_end != NULL &&
+        from != NULL && *out_end >= from) {
+        vm->scan_bytes += (uint64_t)(*out_end - from);
+    }
+    return tr;
+}
+
+/*
  * Branch to control[depth-1-label]. The operand stack is cut back to the
  * target's entry height, carrying one result value across when the target
  * block is valued. LOOP targets rewind to body_start and keep their control
@@ -1069,7 +1101,7 @@ static wasm_trap_t vm_do_branch(wasm_vm_t *vm, wasm_frame_t *f, uint32_t label)
     if (label >= depth) {
         return WASM_TRAP_INVALID_BLOCK_LABEL;
     }
-    tgt = &cs->items[depth - 1u - label];
+    tgt = &cs->pool->items[cs->base + depth - 1u - label];
 
     if (tgt->blocktype == (int32_t)WASM_BLOCKTYPE_VOID) {
         if (wasm_stack_depth(&vm->operands) < tgt->stack_height) {
@@ -1095,17 +1127,25 @@ static wasm_trap_t vm_do_branch(wasm_vm_t *vm, wasm_frame_t *f, uint32_t label)
 
     if (tgt->kind == WASM_BLOCK_TYPE_LOOP) {
         f->code_ptr = tgt->body_start;
-        cs->depth = depth - label; /* retain target, drop entries above it */
+        /* retain target, drop entries above it */
+        tr = wasm_control_stack_truncate(cs, label);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
     } else {
         const uint8_t *else_pos = NULL;
         const uint8_t *end_pos = NULL;
-        tr = vm_scan_block(f->code_ptr, f->code_end, label + 1u, &else_pos, &end_pos);
+        tr = vm_scan_block(vm, f->code_ptr, f->code_end, label + 1u, &else_pos, &end_pos);
         if (tr != WASM_TRAP_OK) {
             return tr;
         }
         (void)else_pos;
         f->code_ptr = end_pos;
-        cs->depth = depth - label - 1u; /* drop target and everything above */
+        /* drop target and everything above it */
+        tr = wasm_control_stack_truncate(cs, label + 1u);
+        if (tr != WASM_TRAP_OK) {
+            return tr;
+        }
     }
     return WASM_TRAP_OK;
 }
@@ -1256,6 +1296,19 @@ static wasm_trap_t vm_check_indirect_sig(wasm_vm_t *vm,
     return WASM_TRAP_INDIRECT_TYPE_MISMATCH; /* unreachable */
 }
 
+uint32_t wasm_vm_scan_charge(wasm_vm_t *vm, uint64_t *cursor)
+{
+    uint64_t delta, charge;
+
+    if (vm == NULL || cursor == NULL) {
+        return 0u;
+    }
+    delta = (vm->scan_bytes > *cursor) ? (vm->scan_bytes - *cursor) : 0u;
+    *cursor = vm->scan_bytes;
+    charge = delta / (uint64_t)WASM_SCAN_BYTES_PER_STEP;
+    return (charge > (uint64_t)UINT32_MAX) ? UINT32_MAX : (uint32_t)charge;
+}
+
 wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
 {
     wasm_frame_t *f = NULL;
@@ -1328,7 +1381,7 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
         {
             const uint8_t *else_pos = NULL;
             const uint8_t *end_pos = NULL;
-            tr = vm_scan_block(f->code_ptr, f->code_end, 1u, &else_pos, &end_pos);
+            tr = vm_scan_block(vm, f->code_ptr, f->code_end, 1u, &else_pos, &end_pos);
             if (tr != WASM_TRAP_OK) {
                 return tr;
             }
@@ -1353,7 +1406,7 @@ wasm_trap_t wasm_vm_step(wasm_vm_t *vm)
         if (tr != WASM_TRAP_OK || top->kind != WASM_BLOCK_TYPE_IF) {
             return WASM_TRAP_ELSE_WITHOUT_IF;
         }
-        tr = vm_scan_block(f->code_ptr, f->code_end, 1u, &else_pos, &end_pos);
+        tr = vm_scan_block(vm, f->code_ptr, f->code_end, 1u, &else_pos, &end_pos);
         if (tr != WASM_TRAP_OK) {
             return tr;
         }

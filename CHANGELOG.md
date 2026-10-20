@@ -3,6 +3,37 @@
 All notable changes to this project are documented here. The project follows
 Keep a Changelog and uses Semantic Versioning.
 
+## [Unreleased] - 2026-10-20
+
+### Added
+
+- Fuzzing infrastructure: `fuzz/` harnesses (parse pipeline, file/stdin entry
+  point, seeded mutation driver, libFuzzer and AFL++ entry points), a Python
+  corpus/mutation driver with crash minimization, backend auto-detection
+  (libFuzzer -> AFL++ -> deterministic loop) and the `make fuzz*` targets.
+- Sanitizer build targets `make asan`, `make ubsan` and `make sanitizers`
+  (own build tree, full unit suite plus a three-suite spec smoke run).
+- `make no-alloc-check`: mechanical verification of the zero-allocation
+  invariant across engine, tests, tools and fuzz drivers.
+- `tests/test_phase13.c`: control-nesting limit and branch-scan budget tests.
+
+### Changed
+
+- Structured-control nesting is bounded by the compile-time constant
+  `WASM_MAX_CTRL_NESTING` (default 1024). All call frames share one
+  fixed-capacity control pool inside `wasm_vm_t`, so the accepted nesting
+  depth grew from 32 to 1024 while the VM structure got smaller.
+- Branch-target scans are charged to the host step budget
+  (`WASM_SCAN_BYTES_PER_STEP`, default 1024), which bounds the cost of a
+  single VM step on pathological modules. Program semantics are unchanged.
+- `make clean` works on native Windows, and `BUILD` is overridable.
+
+### Fixed
+
+- Element sections are parsed with the standard binary encoding (form
+  bytes `0x00/0x02/0x04/0x06`) instead of a pre-standard draft layout, so
+  standard modules with element segments are accepted again.
+
 ## [1.0.0] - 2026-10-11
 
 ### Added
