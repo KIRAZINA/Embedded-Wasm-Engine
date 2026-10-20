@@ -36,6 +36,16 @@ endif
 SPEC_CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude \
               -DWASM_MAX_FUNCTIONS=512 -DWASM_MAX_TABLE_SIZE=1024
 T1        = $(BUILD)/test_phase1
+
+# The CLI-spawning tests must exercise the runner of the build tree they
+# belong to (a sanitized tree has its own runner), so the path is passed
+# as a compile-time define.
+ifeq ($(OS),Windows_NT)
+  TEST_RUNNER_PATH = $(BUILD)\\wasm_runner.exe
+else
+  TEST_RUNNER_PATH = $(BUILD)/wasm_runner
+endif
+TEST_DEFS = -DWASM_TEST_RUNNER='"$(TEST_RUNNER_PATH)"'
 T2        = $(BUILD)/test_phase2
 T3        = $(BUILD)/test_phase3
 T4        = $(BUILD)/test_phase4
@@ -80,63 +90,63 @@ $(RUNNER): $(SRC) src/main.c include/version.h
 
 $(T1): src/leb128.c src/wasm_parser.c tests/test_phase1.c
 	$(MKDIR_P)
-	$(CC) $(CFLAGS) src/leb128.c src/wasm_parser.c tests/test_phase1.c -o $(T1) $(LDLIBS)
+	$(CC) $(CFLAGS) src/leb128.c src/wasm_parser.c tests/test_phase1.c $(TEST_DEFS) -o $(T1) $(LDLIBS)
 
 $(T2): src/leb128.c src/wasm_parser.c src/wasm_stack.c src/wasm_memory.c tests/test_phase2.c
 	$(MKDIR_P)
-	$(CC) $(CFLAGS) src/leb128.c src/wasm_parser.c src/wasm_stack.c src/wasm_memory.c tests/test_phase2.c -o $(T2) $(LDLIBS)
+	$(CC) $(CFLAGS) src/leb128.c src/wasm_parser.c src/wasm_stack.c src/wasm_memory.c tests/test_phase2.c $(TEST_DEFS) -o $(T2) $(LDLIBS)
 
 $(T3): $(SRC) tests/test_phase3.c
 	$(MKDIR_P)
-	$(CC) $(CFLAGS) $(SRC) tests/test_phase3.c -o $(T3) $(LDLIBS)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase3.c $(TEST_DEFS) -o $(T3) $(LDLIBS)
 
 $(T4): $(SRC) tests/test_phase4.c
 	$(MKDIR_P)
-	$(CC) $(CFLAGS) $(SRC) tests/test_phase4.c -o $(T4) $(LDLIBS)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase4.c $(TEST_DEFS) -o $(T4) $(LDLIBS)
 
 $(T5): $(SRC) tests/test_phase5.c
 	$(MKDIR_P)
-	$(CC) $(CFLAGS) $(SRC) tests/test_phase5.c -o $(T5) $(LDLIBS)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase5.c $(TEST_DEFS) -o $(T5) $(LDLIBS)
 
 $(T6): $(SRC) tests/test_phase6.c
 	$(MKDIR_P)
-	$(CC) $(CFLAGS) $(SRC) tests/test_phase6.c -o $(T6) $(LDLIBS)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase6.c $(TEST_DEFS) -o $(T6) $(LDLIBS)
 
 $(TCLI): tests/test_cli.c
 	$(MKDIR_P)
-	$(CC) $(CFLAGS) tests/test_cli.c -o $(TCLI) $(LDLIBS)
+	$(CC) $(CFLAGS) tests/test_cli.c $(TEST_DEFS) -o $(TCLI) $(LDLIBS)
 
 $(T7): $(SRC) tests/test_phase7.c
 	$(MKDIR_P)
-	$(CC) $(CFLAGS) $(SRC) tests/test_phase7.c -o $(T7) $(LDLIBS)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase7.c $(TEST_DEFS) -o $(T7) $(LDLIBS)
 
 $(T8): $(SRC) tests/test_phase8.c
 	$(MKDIR_P)
-	$(CC) $(CFLAGS) $(SRC) tests/test_phase8.c -o $(T8) $(LDLIBS)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase8.c $(TEST_DEFS) -o $(T8) $(LDLIBS)
 
 $(T9): $(SRC) tests/test_phase9.c
 	$(MKDIR_P)
-	$(CC) $(CFLAGS) $(SRC) tests/test_phase9.c -o $(T9) $(LDLIBS)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase9.c $(TEST_DEFS) -o $(T9) $(LDLIBS)
 
 $(T10): $(SRC) tests/test_phase10.c
 	$(MKDIR_P)
-	$(CC) $(CFLAGS) $(SRC) tests/test_phase10.c -o $(T10) $(LDLIBS)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase10.c $(TEST_DEFS) -o $(T10) $(LDLIBS)
 
 $(T11): src/leb128.c src/wasm_parser.c src/wasm_validate.c tests/test_phase11.c
 	$(MKDIR_P)
-	$(CC) $(CFLAGS) src/leb128.c src/wasm_parser.c src/wasm_validate.c tests/test_phase11.c -o $(T11) $(LDLIBS)
+	$(CC) $(CFLAGS) src/leb128.c src/wasm_parser.c src/wasm_validate.c tests/test_phase11.c $(TEST_DEFS) -o $(T11) $(LDLIBS)
 
 $(T12): tests/test_phase12.c include/version.h
 	$(MKDIR_P)
-	$(CC) $(CFLAGS) tests/test_phase12.c -o $(T12) $(LDLIBS)
+	$(CC) $(CFLAGS) tests/test_phase12.c $(TEST_DEFS) -o $(T12) $(LDLIBS)
 
 $(T13): $(SRC) tests/test_phase13.c
 	$(MKDIR_P)
-	$(CC) $(CFLAGS) $(SRC) tests/test_phase13.c -o $(T13) $(LDLIBS)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase13.c $(TEST_DEFS) -o $(T13) $(LDLIBS)
 
 $(T14): $(SRC) tests/test_phase14.c
 	$(MKDIR_P)
-	$(CC) $(CFLAGS) $(SRC) tests/test_phase14.c -o $(T14) $(LDLIBS)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase14.c $(TEST_DEFS) -o $(T14) $(LDLIBS)
 
 $(FUZZ): $(SRC) tests/fuzz_smoke.c
 	$(MKDIR_P)

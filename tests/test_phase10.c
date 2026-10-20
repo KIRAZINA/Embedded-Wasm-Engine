@@ -26,6 +26,13 @@
 #include "wasm_vm.h"
 #include "harness.h"
 
+/* The runner under test. The Makefile passes the path of the binary that
+ * belongs to this build tree, so a sanitized tree exercises the sanitized
+ * runner instead of the plain one. */
+#ifndef WASM_TEST_RUNNER
+#define WASM_TEST_RUNNER "./build/wasm_runner"
+#endif
+
 
 static wasm_vm_t g_vm;
 static wasm_host_registry_t g_reg;
@@ -764,10 +771,10 @@ static void test_cli_dispatch2(void)
 {
 #ifdef _WIN32
     static const char *const fmt =
-        "build\\wasm_runner.exe demo\\dispatch2.wasm main %d %d %d > build\\cli_d2_%d.txt";
+        WASM_TEST_RUNNER " demo\\dispatch2.wasm main %d %d %d > build\\cli_d2_%d.txt";
 #else
     static const char *const fmt =
-        "./build/wasm_runner demo/dispatch2.wasm main %d %d %d > build/cli_d2_%d.txt";
+        WASM_TEST_RUNNER " demo/dispatch2.wasm main %d %d %d > build/cli_d2_%d.txt";
 #endif
     static const struct {
         int sel, a, b;

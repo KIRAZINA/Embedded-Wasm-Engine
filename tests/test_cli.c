@@ -25,12 +25,19 @@
 #include <string.h>
 #include "harness.h"
 
+/* The runner under test. The Makefile passes the path of the binary that
+ * belongs to this build tree, so a sanitized tree exercises the sanitized
+ * runner instead of the plain one. */
+#ifndef WASM_TEST_RUNNER
+#define WASM_TEST_RUNNER "./build/wasm_runner"
+#endif
+
 
 #ifdef _WIN32
-#define RUNNER "build\\wasm_runner.exe"
+#define RUNNER WASM_TEST_RUNNER
 #define SEP "\\"
 #else
-#define RUNNER "./build/wasm_runner"
+#define RUNNER WASM_TEST_RUNNER
 #define SEP "/"
 #endif
 

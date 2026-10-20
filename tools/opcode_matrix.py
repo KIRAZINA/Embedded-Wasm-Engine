@@ -12,7 +12,12 @@ import os
 import re
 import sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Resolve the repository root from this file's location. The path is
+# normalised first: the tool is invoked with mixed separators on some
+# platforms (for example "tools\opcode_matrix.py" under a POSIX shell),
+# and os.path.dirname() does not split those reliably.
+_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(os.path.abspath(__file__))))
+ROOT = _ROOT
 CSV_PATH = os.path.join(ROOT, "tools", "mvp_opcodes.csv")
 TYPES_H = os.path.join(ROOT, "include", "wasm_types.h")
 VM_C = os.path.join(ROOT, "src", "wasm_vm.c")

@@ -27,6 +27,13 @@
 #include "wasm_vm.h"
 #include "harness.h"
 
+/* The runner under test. The Makefile passes the path of the binary that
+ * belongs to this build tree, so a sanitized tree exercises the sanitized
+ * runner instead of the plain one. */
+#ifndef WASM_TEST_RUNNER
+#define WASM_TEST_RUNNER "./build/wasm_runner"
+#endif
+
 
 static wasm_vm_t g_vm;
 
@@ -1058,14 +1065,14 @@ static void test_cli_float(void)
 {
 #ifdef _WIN32
     static const char *const cmd_run =
-        "build\\wasm_runner.exe demo\\fadd.wasm main > build\\cli_fadd.txt";
+        WASM_TEST_RUNNER " demo\\fadd.wasm main > build\\cli_fadd.txt";
     static const char *const cmd_dump =
-        "build\\wasm_runner.exe --dump demo\\fadd.wasm > build\\dump_fadd.txt";
+        WASM_TEST_RUNNER " --dump demo\\fadd.wasm > build\\dump_fadd.txt";
 #else
     static const char *const cmd_run =
-        "./build/wasm_runner demo/fadd.wasm main > build/cli_fadd.txt";
+        WASM_TEST_RUNNER " demo/fadd.wasm main > build/cli_fadd.txt";
     static const char *const cmd_dump =
-        "./build/wasm_runner --dump demo/fadd.wasm > build/dump_fadd.txt";
+        WASM_TEST_RUNNER " --dump demo/fadd.wasm > build/dump_fadd.txt";
 #endif
     static char out[4096];
     FILE *fp = NULL;
