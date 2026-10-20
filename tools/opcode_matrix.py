@@ -12,12 +12,28 @@ import os
 import re
 import sys
 
-# Resolve the repository root from this file's location. The path is
-# normalised first: the tool is invoked with mixed separators on some
-# platforms (for example "tools\opcode_matrix.py" under a POSIX shell),
-# and os.path.dirname() does not split those reliably.
-_ROOT = os.path.dirname(os.path.dirname(os.path.realpath(os.path.abspath(__file__))))
-ROOT = _ROOT
+def find_root() -> str:
+    """Locate the repository root.
+
+    The tool is invoked from several places (the Makefile, the test
+    suite, a shell on Windows that mixes path separators), so the
+    directory is probed instead of derived from a single expression:
+    first the current directory, then the directory of this file.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.getcwd(),
+        os.path.dirname(here),
+        os.path.dirname(os.path.dirname(here)),
+    ]
+    for cand in candidates:
+        if os.path.isfile(os.path.join(cand, "tools", "mvp_opcodes.csv")):
+            return cand
+    # fall back to the conventional location next to this file
+    return os.path.dirname(os.path.dirname(here))
+
+
+ROOT = find_root()
 CSV_PATH = os.path.join(ROOT, "tools", "mvp_opcodes.csv")
 TYPES_H = os.path.join(ROOT, "include", "wasm_types.h")
 VM_C = os.path.join(ROOT, "src", "wasm_vm.c")
