@@ -3,7 +3,12 @@
 All notable changes to this project are documented here. The project follows
 Keep a Changelog and uses Semantic Versioning.
 
-## [1.1.0] - 2026-10-20
+## [Unreleased] - draft for the next release (recommended: 1.1.0)
+
+*Not released yet: the final verification found an open Definition-of-Done
+item (the integer/control/memory spec suites are not at 100 %), so no
+version was bumped and no tag was created. The version below is the
+recommendation for the curator — see `PHASE6_REPORT.md`.*
 
 This release closes the hardening and readiness phases (4, 5 and 6) on
 top of the 1.0.0 core interpreter. It is additive and backward
