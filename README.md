@@ -346,11 +346,12 @@ imports). `make realworld-verify` runs the committed modules through the
 engine only, without a wasm toolchain. See
 [`realworld/README.md`](realworld/README.md).
 
-CI gates: `make spec-summary` runs the official spec suite and fails only
-on a regression against the numeric baseline in
-[`tests/spec/DEVIATIONS.md`](tests/spec/DEVIATIONS.md); `make size-check`
-fails when the engine's `.text` grew by more than 5 % against
-`size_baseline.txt`.
+CI gates: `make spec` (and `make spec-summary`) run the official spec
+suite and fail only on a regression against the numeric baseline in
+[`tests/spec/DEVIATIONS.md`](tests/spec/DEVIATIONS.md);
+`make spec-report` keeps the raw runner behaviour (exit 1 on any
+unclassified failure). `make size-check` fails when the engine's
+`.text` grew by more than 5 % against `size_baseline.txt`.
 
 The spec harness is `tools/run_spec_suite.py` and uses only Python 3's standard
 library. The user supplies `.wast` conversions; no binaries are bundled. A
