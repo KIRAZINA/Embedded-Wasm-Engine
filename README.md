@@ -56,16 +56,12 @@ anywhere**, verified by audit. All builds are warning-free under
 
 ## Scope limits (by design)
 
-- No f32/f64 load/store opcodes yet (`0x2A/0x2B/0x38/0x39`): the
-  bounds-checked, NaN-payload-exact memory helpers exist and are tested,
-  but the interpreter does not dispatch float memory instructions.
 - Blocks carry void or i32 results; functions return at most one value.
 - Fixed capacities (see Limits); oversized modules trap cleanly instead of
   allocating.
 - CLI supports `--arg i32:5`, `--arg i64:-1`, `--arg f32:3.5`, and
   `--arg f64:2e10`; hexadecimal float values use raw bits, e.g.
   `f32:0x3f800000` or `f64:0x3ff0000000000000`.
-  or GC extensions.
 - Table imports are rejected (`WASM_ERR_IMPORTED_TABLES_UNSUPPORTED`):
   the host has no table concept, so a module importing a table cannot
   link. Only one defined table is supported, and only the first data /
@@ -85,21 +81,24 @@ anywhere**, verified by audit. All builds are warning-free under
 
 ```
 .
-├── Plan.md            # original design spec and phased roadmap
-├── Makefile           # all / test / test1..6 / runner / clean (POSIX shell)
+├── Makefile           # all / test / test1..14 / runner / clean (POSIX shell)
 ├── include/           # leb128.h, wasm_types.h, wasm_parser.h, wasm_stack.h,
 │                      #   wasm_memory.h, wasm_frame.h, wasm_control.h,
 │                      #   wasm_vm.h, wasm_host.h
 ├── src/               # leb128.c, wasm_parser.c, wasm_stack.c, wasm_memory.c,
 │                      #   wasm_frame.c, wasm_control.c, wasm_vm.c,
 │                      #   wasm_host.c, main.c (CLI runner)
-├── tests/             # test_phase1.c … test_phase10.c, test_cli.c (assert-based, no framework)
+├── tests/             # harness.h + test_phase1.c … test_phase14.c, test_cli.c
+├── fuzz/              # the fuzzing pipeline and its drivers (zero allocation)
+├── realworld/         # real clang --target=wasm32 modules + the native comparison
+├── tools/             # spec harness, size report, baseline checks, generators
+├── docs/              # SPEC_STATUS.md, LIMITS.md, OPCODE_MATRIX.md
 ├── demo/              # add.wasm (main(a,b)->a+b), print.wasm (host-callback demo),
 │                      #   fadd.wasm (main()->f32 { 1.5 + 2.5 }),
 │                      #   dispatch.wasm (main(i)->i32 dispatch via br_table),
 │                      #   dispatch2.wasm (add/sub chosen at runtime via call_indirect),
 │                      #   hello.wasm (data "Hello" + print loop via env.print_i32)
-└── build/             # wasm_runner + 11 test binaries (generated)
+└── build/             # wasm_runner + 15 test binaries (generated)
 ```
 
 ## Requirements
@@ -212,23 +211,50 @@ All MVP core sections are traversed, with custom section 0 skipped correctly:
 | 10 code | Supported |
 | 11 data | Supported |
 
-The interpreter dispatches 123 MVP instruction opcodes, grouped as follows:
+The interpreter dispatches the **172 canonical MVP opcodes** — every opcode of
+the MVP instruction set, including the float memory loads/stores, the
+conversions and the reinterpretations. The generated, per-opcode status
+table is [`docs/OPCODE_MATRIX.md`](docs/OPCODE_MATRIX.md): it is
+produced from the engine sources themselves (`tools/opcode_matrix.py`)
+and runs as part of `tests/test_phase12.c`, so it cannot drift from the
+code.
 
-| Group | Count | Coverage |
-|---|---:|---|
-| Control, calls, branches, select | 13 | structured control, direct/indirect calls |
-| Constants, locals, globals | 9 | four value types and mutable globals |
-| i32 integer | 24 | comparisons, arithmetic, bitwise, shifts, memory load/store |
-| i64 integer | 13 | arithmetic, bitwise, shifts |
-| f32/f64 floating point | 40 | arithmetic, comparisons, rounding, min/max |
-| Conversions and reinterpretation | 22 | truncation, conversion, promote/demote, bit reinterpretation |
-| Memory | 2 | `i32.load` and `i32.store` |
+| Group | Coverage |
+|---|---|
+| Control, calls, branches, select | structured control, direct/indirect calls, `br_table` |
+| Constants, locals, globals | four value types, mutable globals |
+| i32 / i64 integer | comparisons, arithmetic, bitwise, shifts, memory load/store |
+| f32 / f64 floating point | arithmetic, comparisons, rounding, min/max, memory load/store |
+| Conversions and reinterpretation | truncation, conversion, promote/demote, bit reinterpretation |
 
 Not implemented: threads/atomics, SIMD, GC, multi-value blocks or returns,
 bulk-memory operations, reference types, sign-extension operations, tail
-calls, multi-memory, and exception handling. Floating-point memory load/store
-opcodes are also not dispatched. These omissions are deliberate MVP subset
-limits and are not claims of full modern-WebAssembly coverage.
+calls, multi-memory, and exception handling. These omissions are deliberate
+MVP subset limits and are not claims of full modern-WebAssembly coverage.
+
+### Spec compliance
+
+The measured conformance state is in
+[`docs/SPEC_STATUS.md`](docs/SPEC_STATUS.md): 65 official spec suites,
+20,236 assertions, **16,432 passing (81.2 %)**, with every failure
+classified. The numeric baseline is checked in CI
+(`tools/check_spec_baseline.py`), so a regression fails the build.
+
+### Spec deviations
+
+The engine is an MVP interpreter with fixed capacity and single-instance
+linking. The documented deviations are:
+
+| Deviation | Effect |
+|---|---|
+| Fixed capacity limits | Functions, table size, globals, data segments, control nesting (1024) and branch-scan cost are compile-time limits; a module that exceeds one is rejected. See [`docs/LIMITS.md`](docs/LIMITS.md). |
+| No multi-module linking | The engine links one module into one instance; `register` and cross-module tests are not supported. This is the cause of most remaining spec failures. |
+| No post-MVP features | Sign extension, bulk memory, non-trapping conversions, multi-value, reference types, SIMD and tail calls are rejected as invalid. |
+| Host `libm` for `sqrt`/conversions | One documented rounding deviation for `f64 sqrt` of `0x7fefffffffffffff`. |
+| No UTF-8 name validation | Module and export names are compared byte-wise. |
+
+The full list with the reason for each entry is in
+[`tests/spec/DEVIATIONS.md`](tests/spec/DEVIATIONS.md).
 
 ## Quickstart
 
@@ -264,9 +290,20 @@ usage or I/O failure. Typed arguments use `--arg i32:5`, `--arg i64:-1`,
 hexadecimal integer, for example `--arg f32:0x3f800000` and
 `--arg f64:0x3ff0000000000000`. `--quiet` suppresses banners. `--result-line`
 prints exactly one `RESULT ...` line for machine consumers. `--version`
-prints `1.0.0`. Every module is statically validated before linking;
-validation failure exits 1 with `error: validation: NAME` on stderr.
-`--no-validate` skips that check (the module may then trap at runtime).
+prints `1.0.0`.
+
+Every module is statically validated before linking; validation failure
+exits 1 with `error: validation: NAME` on stderr. `--no-validate` skips
+that static check — the module is then linked and executed as-is, so it
+may trap at runtime (or fail to link). Use it to reproduce a runtime
+failure of a module the validator rejects, and only then: the static
+check is the safer default.
+
+The CLI reads at most **1 MiB** (`RUNNER_FILE_MAX`) and provides a
+one-page linear-memory arena; a larger file is a usage error, and a
+module whose data does not fit the arena fails with a memory error. The
+embedded targets use their own, smaller budget (4 KiB) — see
+[`docs/LIMITS.md`](docs/LIMITS.md).
 
 ## Conformance and fuzz tooling
 
@@ -298,6 +335,22 @@ test or fuzz source calls a dynamic allocation API.
 
 The fuzzers and the shared pipeline live in `fuzz/`; all of their buffers
 are static, so the fuzz drivers allocate nothing either.
+
+`make realworld` is the readiness proof: three C programs (integer sort,
+8x8 f32 matrix multiply, CRC-32 with a lookup table in the data section)
+are compiled natively and with `clang --target=wasm32`, and the engine's
+output must match the native one byte for byte. The emitted modules are
+checked to be MVP-only (no sign extension, bulk memory, non-trapping
+conversions, multi-value, reference types, SIMD, mutable globals or
+imports). `make realworld-verify` runs the committed modules through the
+engine only, without a wasm toolchain. See
+[`realworld/README.md`](realworld/README.md).
+
+CI gates: `make spec-summary` runs the official spec suite and fails only
+on a regression against the numeric baseline in
+[`tests/spec/DEVIATIONS.md`](tests/spec/DEVIATIONS.md); `make size-check`
+fails when the engine's `.text` grew by more than 5 % against
+`size_baseline.txt`.
 
 The spec harness is `tools/run_spec_suite.py` and uses only Python 3's standard
 library. The user supplies `.wast` conversions; no binaries are bundled. A
@@ -391,8 +444,12 @@ static memory arena and host bindings.
 
 ## Testing
 
-Standalone `assert`-style suites, no test framework. Current status:
-**2024/2024 passing, 0 failed** (`make test` prints `TOTAL: 2024 passed, 0 failed`).
+Standalone suites on the shared harness in `tests/harness.h` (test
+registration, counters, assert macros with file:line, non-zero exit on
+failure; no test framework, no allocation). Current status:
+**2036/2036 passing, 0 failed** (`make test` prints
+`TOTAL: 2036 passed, 0 failed`; `HARNESS_VERBOSE=1` prints every
+passing assertion as well).
 
 | Suite | Coverage | Checks |
 |---|---|---|
@@ -408,8 +465,9 @@ Standalone `assert`-style suites, no test framework. Current status:
 | `test_phase8` | br_table all-arms/default/unsigned-index/loop-target/valued-carry/malformed/scanner, select over 4 types incl. NaN/mismatch/underflow, CLI dispatch run | 118 |
 | `test_phase7` | f32/f64 const/arith/sqrt/min-max/abs-neg-copysign/round/nearest/cmp, all 8 trunc boundaries, converts, reinterprets, NaN propagation, memory NaN round-trips, CLI f32 run + dump | 371 |
 | `test_phase11` | static module validation corpus | 205 |
-| `test_phase12` | conformance/fuzz tooling helpers | 8 |
+| `test_phase12` | conformance/fuzz tooling helpers, opcode-matrix generator | 8 |
 | `test_phase13` | control-nesting limit (validator + interpreter), shared control pool, branch-scan budget | 23 |
+| `test_phase14` | real clang output (qsort, f32 matmul, CRC-32) and the typed-local regression | 12 |
 
 ## Architecture
 
@@ -431,7 +489,8 @@ Standalone `assert`-style suites, no test framework. Current status:
 - `wasm_host`: 16-slot native callback registry; import→host binding with
   functype verification; export lookup; whole-module instantiation into the
   VM's 32-slot function table (imports first, per MVP index space).
-- `main`: ≤64 KiB file buffer, 1-page arena, 10M-step watchdog.
+- `main`: ≤1 MiB file buffer, 1-page arena, 10M-step watchdog, branch-scan
+  budget.
 
 ## Fixed limits
 
@@ -440,18 +499,22 @@ Standalone `assert`-style suites, no test framework. Current status:
 | Operand stack | 1024 values | `WASM_TRAP_STACK_OVERFLOW` |
 | Call stack | 64 frames | `WASM_TRAP_CALL_STACK_OVERFLOW` |
 | Locals per frame | 32 | `WASM_TRAP_INVALID_LOCAL_INDEX` |
-| Control nesting | 32 blocks | `WASM_TRAP_CONTROL_STACK_OVERFLOW` |
+| Control nesting | 1024 blocks, shared by the whole call stack (`WASM_MAX_CTRL_NESTING`, `-D` overridable) | `WASM_TRAP_CONTROL_STACK_OVERFLOW` |
 | VM functions | 32 | `WASM_TRAP_INVALID_ARGUMENT` |
 | Host callbacks | 16 (31-char names) | `WASM_TRAP_INVALID_ARGUMENT` |
-| CLI input file | 64 KiB | usage error |
+| CLI input file | 1 MiB (`RUNNER_FILE_MAX`; embedded builds override it to 4 KiB) | usage error |
 | Branch labels | open depth | `WASM_TRAP_INVALID_BLOCK_LABEL` |
+| Branch-scan cost | 1024 scanned bytes = 1 watchdog step (`WASM_SCAN_BYTES_PER_STEP`, `-D` overridable) | budget exhausted |
 | Indirect table | 128 (`WASM_MAX_TABLE_SIZE`, `-D` overridable) | `WASM_ERR_SECTION_OVERFLOW` |
 | Globals (imported + defined) | 32 (`WASM_MAX_GLOBALS`, `-D` overridable) | `WASM_ERR_SECTION_OVERFLOW` |
 | Host-provided globals | 16 (`WASM_MAX_HOST_GLOBALS`, `-D` overridable) | `WASM_TRAP_INVALID_ARGUMENT` |
 | Data segments | 32 (`WASM_MAX_DATA_SEGMENTS`, `-D` overridable) | `WASM_ERR_SECTION_OVERFLOW` |
 | br_table labels | 256 (`WASM_MAX_BR_TABLE_LABELS`, `-D` overridable) | `WASM_TRAP_INVALID_ARGUMENT` |
 | Validation value stack | 1024 (`WASM_VALIDATE_STACK_MAX`, `-D` overridable) | `WASM_ERR_SECTION_OVERFLOW` |
-| Validation control depth | 32 (`WASM_MAX_CONTROL_STACK_DEPTH`, shared with execution) | `WASM_ERR_INVALID_BLOCK` |
+| Validation control depth | 1024 (`WASM_MAX_CTRL_NESTING`, shared with execution) | `WASM_ERR_INVALID_BLOCK` |
+
+The exhaustive list, including the embedded overrides, is in
+[`docs/LIMITS.md`](docs/LIMITS.md).
 
 Fuzz-smoke defaults are also overrideable at compile time: `FUZZ_MAX_BYTES`
 256, `FUZZ_PAGE_COUNT` 1, and `FUZZ_STEP_BUDGET` 10.
@@ -461,29 +524,44 @@ Fuzz-smoke defaults are also overrideable at compile time: `FUZZ_MAX_BYTES`
 Static engine cost (measured by `make size-report`):
 
 ```
-sizeof(vm)=105008  sizeof(registry)=3584  sizeof(mem)=24
-engine = 108616 bytes  (limit 131072)  →  < 128 KiB ✓
+sizeof(vm)=80960  sizeof(registry)=3584  sizeof(mem)=24
+engine = 84568 bytes  (limit 131072)  →  < 128 KiB ✓
 ```
 
+The engine library itself (`.text`, `-Os`, freestanding) measures
+49,010 bytes and has no static data; `make size-check` compares it
+against the committed `size_baseline.txt` and fails when it grew by
+more than 5 %.
+
 Guest linear memory and the module image live in application-owned buffers
-the engine only borrows, so an embedded target pays the ~101.6 KiB engine
+the engine only borrows, so an embedded target pays the ~82.6 KiB engine
 cost plus whatever arena it provisions.
 
-## Roadmap status vs `Plan.md`
+## Roadmap status
 
-Phases 1–4 of the plan are implemented (delivered as six incremental phases
-here); host integration works through the generic callback registry, proven
-with `print_i32`. The f32/f64 arithmetic gap is closed (Phase 1 float work,
-proven by `test_phase7` + `demo/fadd.wasm`). Globals, data segments, and
-the start function are implemented (Phase 3 work, proven by `test_phase9`
-+ `demo/hello.wasm`). Tables, element segments, and `call_indirect` are
-implemented (Phase 4 work, proven by `test_phase10` + `demo/dispatch2.wasm`),
-completing the full MVP section set. Deliberately still open:
-multi-value blocks/functions, f32/f64 load/store opcodes, and
-physical deployment to an ESP32/STM32 target (GPIO/LED bindings would
-register through the existing host table).
+Phases 1–5 of the plan are implemented (delivered as incremental phases
+here): host integration works through the generic callback registry,
+proven with `print_i32`; the f32/f64 arithmetic gap is closed (Phase 1
+float work, proven by `test_phase7` + `demo/fadd.wasm`); globals, data
+segments and the start function are implemented (proven by
+`test_phase9` + `demo/hello.wasm`); tables, element segments and
+`call_indirect` are implemented (proven by `test_phase10` +
+`demo/dispatch2.wasm`), completing the full MVP section set. Phase 3
+brought the official spec suite into the loop, phase 4 hardened the
+engine against hostile input (nesting limit, branch-scan budget,
+sanitizers, fuzzers), and phase 5 proves the engine on **real compiler
+output** (`realworld/`: clang `--target=wasm32` modules that must match
+the native build byte for byte) and locks it into CI.
+
+Deliberately still open: multi-module linking, post-MVP proposals
+(multi-value, bulk memory, reference types, SIMD), UTF-8 name
+validation, and physical deployment to an ESP32/STM32 target (GPIO/LED
+bindings would register through the existing host table).
 
 ## Baseline status (`v0.0.0-baseline`, 2026-10-11)
+
+*Historical record of the first release; the current status is the
+sections above.*
 
 What works (measured, `mingw32-make CC=gcc test` on MinGW gcc 8.1.0):
 warning-free build under `-std=c11 -Wall -Wextra -Wpedantic -Werror`;
