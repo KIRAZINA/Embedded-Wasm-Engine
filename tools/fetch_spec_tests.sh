@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # fetch_spec_tests.sh — reproduce official WebAssembly spec corpus
 # Invariant: zero C allocation; this is Python/shell tooling only.
-set -euo pipefail
+#
+# POSIX sh compatible on purpose: CI and the release verification invoke
+# it as `sh tools/fetch_spec_tests.sh`, and `set -o pipefail` is not
+# available there.
+set -eu
 
 UPSTREAM="tests/spec/upstream"
 OUTDIR="tests/spec/json"
