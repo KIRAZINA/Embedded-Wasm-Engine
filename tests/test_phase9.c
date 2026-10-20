@@ -1,5 +1,5 @@
 /*
- * test_phase9.c — Phase 3 verification: globals, data segments, start.
+ * test_phase9.c — globals, data segments and the start function.
  * Standalone, C11, assert-style. Modules are hand-assembled (runtime-built
  * only for the 32/33-count cap cases); multi-byte immediates use exact
  * hand-verified bytes.

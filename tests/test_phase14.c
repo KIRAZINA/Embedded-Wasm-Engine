@@ -1,5 +1,5 @@
 /*
- * test_phase14.c — Phase 5: real-world (clang) modules + typed locals.
+ * test_phase14.c — real clang output and the typed-local regression.
  *
  * Two groups of checks:
  *

@@ -1,5 +1,5 @@
 # Baseline Makefile — C11 strict, zero-dependency (libm only for floats).
-# `make all`  : builds wasm_runner + all test binaries (phase1..10, cli).
+# `make all`  : builds wasm_runner + all test binaries.
 # `make test` : builds everything, runs all suites sequentially, prints
 #               per-suite results and a final TOTAL line
 #               ("TOTAL: X passed, Y failed"); non-zero exit on failure.

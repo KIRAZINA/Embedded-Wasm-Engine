@@ -1,5 +1,5 @@
 /*
- * test_phase8.c — Phase 2 (control-flow completion): br_table + select.
+ * test_phase8.c — br_table and select.
  * Standalone, C11, assert-style. br_table vectors are emitted at runtime
  * (SLEB/ULEB encoders below) so label bytes are exact by construction.
  *

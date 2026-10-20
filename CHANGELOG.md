@@ -5,15 +5,15 @@ Keep a Changelog and uses Semantic Versioning.
 
 ## [Unreleased] - draft for the next release (recommended: 1.1.0)
 
-*Not released yet: the final verification found an open Definition-of-Done
+*Not released yet: the final verification found one open conformance
 item (the integer/control/memory spec suites are not at 100 %), so no
-version was bumped and no tag was created. The version below is the
-recommendation for the curator — see `PHASE6_REPORT.md`.*
+version was bumped and no tag was created. The version above is the
+recommendation — the conformance state is documented in
+`docs/SPEC_STATUS.md` and `tests/spec/DEVIATIONS.md`.*
 
-This release closes the hardening and readiness phases (4, 5 and 6) on
-top of the 1.0.0 core interpreter. It is additive and backward
-compatible: the engine's public behaviour is unchanged except where a
-bug is fixed below.
+This release closes the hardening and readiness work on top of the 1.0.0
+core interpreter. It is additive and backward compatible: the engine's
+public behaviour is unchanged except where a bug is fixed below.
 
 ### Added
 
@@ -84,8 +84,8 @@ bug is fixed below.
 ### Known limitations
 
 See `docs/SPEC_STATUS.md` and `tests/spec/DEVIATIONS.md`: multi-module
-linking, externref/multi-table support, post-MVP proposals, UTF-8 name
-validation, and one `f64 sqrt` rounding edge case in the host `libm`.
+linking, missing host functions, UTF-8 name validation, post-MVP
+proposals, and the spec assertions that are still untriaged.
 
 ## [1.0.0] - 2026-10-11
 
@@ -123,40 +123,34 @@ validation, and one `f64 sqrt` rounding edge case in the host `libm`.
 - Initial zero-allocation C11 MVP parser, linker, interpreter, host registry,
   fixed-capacity stacks, linear memory, tests, demos, and CLI.
 
-The intermediate Phase 0–7 commits are preserved in git history; this release
-entry groups their externally visible milestones for readers of the changelog.
+The intermediate commits are preserved in git history; this release
+entry groups their externally visible milestones for readers of the
+changelog.
 
-## Phase history
+## Development history
 
-The project was delivered in explicit phases; each phase below names the
-commit series and its externally visible result.
+The engine was built incrementally; the externally visible milestones
+were:
 
-- **Phase 0 — baseline:** the C11 zero-allocation project baseline, the
+- **Foundation:** the C11 zero-allocation project baseline, the
   invariant list (no dynamic allocation, fixed capacity, `make test`
   green) and the first audit of the engine's structure.
-- **Phase 1 — spec suite compliance:** the official WebAssembly spec
-  corpus became the measuring instrument (`tools/fetch_spec_tests.sh`,
+- **Core engine:** LEB128 decoding, header parsing, section traversal,
+  operand stacks, linear memory, frames, calls, locals, the i32
+  instruction set, structured control flow, host callbacks,
+  exports/imports, the CLI, the f32/f64 instruction set, `select`,
+  `br_table`, globals/data/start, tables and indirect calls.
+- **Conformance:** the official WebAssembly spec corpus became the
+  measuring instrument (`tools/fetch_spec_tests.sh`,
   `tools/run_spec_suite.py`), float arithmetic was corrected (NaN
   canonicalization, `sqrtf`), and trap messages were mapped to the spec
   wording.
-- **Phase 2 — fuzzing and robustness:** the fuzzing infrastructure
-  (`fuzz/`, libFuzzer/AFL++/deterministic backends), the sanitizer
-  targets (`make asan`, `make ubsan`, `make sanitizers`), the control
-  nesting limit (`WASM_MAX_CTRL_NESTING`, 1024) and the branch-scan
-  budget (`WASM_SCAN_BYTES_PER_STEP`).
-- **Phase 3 — real-world modules, CI and documentation:** real clang
-  `--target=wasm32` output as the readiness proof (`realworld/`), the
-  CI rewrite with a build matrix plus spec and size gates, the shared
-  test harness (`tests/harness.h`) and the documentation truth pass
-  (`docs/SPEC_STATUS.md`, `docs/LIMITS.md`).
-- **Earlier work (phases 0–7 of the original plan):** LEB128 decoding,
-  header parsing, section traversal, operand stacks, linear memory,
-  frames, calls, locals, the i32 instruction set, structured control
-  flow, host callbacks, exports/imports, the CLI, the f32/f64
-  instruction set, `select`, `br_table`, globals/data/start, tables and
-  indirect calls, validation, conformance tooling, CI, embedded targets
-  and release packaging.
-
-The intermediate commits are preserved in the git history; the release
-entries below group their externally visible milestones for readers of
-the changelog.
+- **Hardening:** the fuzzing infrastructure (`fuzz/`, with
+  libFuzzer/AFL++/deterministic backends), the sanitizer targets
+  (`make asan`, `make ubsan`, `make sanitizers`), the control nesting
+  limit (`WASM_MAX_CTRL_NESTING`, 1024) and the branch-scan budget
+  (`WASM_SCAN_BYTES_PER_STEP`).
+- **Readiness:** real clang `--target=wasm32` output as the acceptance
+  proof (`realworld/`), the CI matrix with spec and size gates, the
+  shared test harness (`tests/harness.h`) and the documentation pass
+  (`docs/SPEC_STATUS.md`, `LIMITS.md`).

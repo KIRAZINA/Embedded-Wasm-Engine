@@ -1,5 +1,5 @@
 /*
- * test_phase13.c — Phase 4 hardening: nesting limit + scan budget.
+ * test_phase13.c — the control-nesting limit and the branch-scan budget.
  *
  * Covers:
  *  - the compile-time control-nesting limit (WASM_MAX_CTRL_NESTING):

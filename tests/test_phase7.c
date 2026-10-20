@@ -1,5 +1,5 @@
 /*
- * test_phase7.c — Phase 1 (float) verification: complete f32/f64 MVP set.
+ * test_phase7.c — the complete f32/f64 MVP instruction set.
  * Standalone, C11, assert-style. Float immediates are emitted from exact
  * bit patterns at runtime (no hand-typed LE bytes to get wrong).
  *

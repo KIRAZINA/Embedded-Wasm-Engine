@@ -19,8 +19,9 @@ tests/spec/*.wasm
 *.lib
 *.exp
 
-# Local editor/agent tooling state
-.kilo/
-
-# macOS metadata
+# Editor and OS metadata
+.vscode/
+.idea/
+*.swp
 .DS_Store
+Thumbs.db

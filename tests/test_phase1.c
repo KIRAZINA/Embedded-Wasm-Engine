@@ -1,5 +1,6 @@
 /*
- * test_phase1.c — standalone Phase 1 verification (C11, assert.h + stdio.h only).
+ * test_phase1.c — LEB128 decoding and the module header parser
+ * (C11, stdio.h only).
  *
  * Covers (required):
  *  1. Valid dummy WASM header (+ multi-section traversal)

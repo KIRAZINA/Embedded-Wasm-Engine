@@ -1,9 +1,10 @@
 # Spec compliance status
 
 The engine implements the **WebAssembly MVP** (core 1.0). This page
-distils the measured conformance state; the raw evidence lives in
-`PHASE3_REPORT.md` (phase 3), `PHASE4_REPORT.md` (phase 4) and
-`PHASE5_REPORT.md` (phase 5).
+distils the measured conformance state: the numbers, the failure
+classes, the per-area status and the deliberate deviations. The numeric
+baseline that CI checks against lives in
+[`tests/spec/DEVIATIONS.md`](../tests/spec/DEVIATIONS.md).
 
 ## How the numbers are produced
 
@@ -84,7 +85,7 @@ The complete list with the reason for each is in
 version:
 
 * **Capacity limits** are fixed at compile time (see
-  [`docs/LIMITS.md`](LIMITS.md)): functions, table size, globals, data
+  [`LIMITS.md`](../LIMITS.md)): functions, table size, globals, data
   segments, control nesting, branch-scan cost. A module that exceeds
   one is rejected instead of being executed.
 * **Multi-module linking** is not supported; the engine links one

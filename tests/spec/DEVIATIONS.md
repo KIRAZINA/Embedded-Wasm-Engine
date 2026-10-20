@@ -23,7 +23,7 @@ Every entry is explicitly classified and justified. Silently ignored = violation
 - Only host function `env.print_i32` registered; other import dependencies
   produce `KNOWN_DEVIATION:spectest-host`.
 
-## Float / NaN (fixed in phase3 — documented for traceability)
+## Float / NaN (fixed — documented for traceability)
 - Before fix: arithmetic NaN propagated host payload (non-canonical).
   Fixed by `vm_f32_arith_res` / `vm_f64_arith_res`; canonical quiet NaN
   (`0x7FC00000` / `0x7FF8000000000000`) emitted after every arithmetic op.
@@ -38,7 +38,7 @@ Every entry is explicitly classified and justified. Silently ignored = violation
 - `undefined element` / `uninitialized element` / exact `unreachable`
   mapped per `include/wasm_types.h` → `TRAP_MAP`.
 
-## Unfixable / ambiguous (for curator decision — do not hack around)
+## Unfixable / ambiguous (for maintainer decision — do not hack around)
 - [None identified yet; to be filled by triage loop.]
 
 ## Numeric baseline (CI regression gate)

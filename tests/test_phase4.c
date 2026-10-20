@@ -1,5 +1,5 @@
 /*
- * test_phase4.c — Phase 4 verification: instruction execution core.
+ * test_phase4.c — the i32 instruction set: ALU, comparisons, shifts, memory.
  * Standalone, C11, stdio.h/stdint.h only. Hand-assembled bytecode vectors.
  *
  * Build: gcc -std=c11 -Wall -Wextra -Werror -Iinclude src/leb128.c

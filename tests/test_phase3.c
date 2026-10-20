@@ -1,5 +1,5 @@
 /*
- * test_phase3.c — Phase 3 verification: frames, call stack, enter/exit, locals.
+ * test_phase3.c — frames, call stack, enter/exit and locals.
  * Standalone, C11, assert.h/stdio.h only.
  *
  * Build: gcc -std=c11 -Wall -Wextra -Werror -Iinclude src/leb128.c

@@ -92,7 +92,7 @@ anywhere**, verified by audit. All builds are warning-free under
 ├── fuzz/              # the fuzzing pipeline and its drivers (zero allocation)
 ├── realworld/         # real clang --target=wasm32 modules + the native comparison
 ├── tools/             # spec harness, size report, baseline checks, generators
-├── docs/              # SPEC_STATUS.md, LIMITS.md, OPCODE_MATRIX.md
+├── docs/              # SPEC_STATUS.md, OPCODE_MATRIX.md (generated)
 ├── demo/              # add.wasm (main(a,b)->a+b), print.wasm (host-callback demo),
 │                      #   fadd.wasm (main()->f32 { 1.5 + 2.5 }),
 │                      #   dispatch.wasm (main(i)->i32 dispatch via br_table),
@@ -247,7 +247,7 @@ linking. The documented deviations are:
 
 | Deviation | Effect |
 |---|---|
-| Fixed capacity limits | Functions, table size, globals, data segments, control nesting (1024) and branch-scan cost are compile-time limits; a module that exceeds one is rejected. See [`docs/LIMITS.md`](docs/LIMITS.md). |
+| Fixed capacity limits | Functions, table size, globals, data segments, control nesting (1024) and branch-scan cost are compile-time limits; a module that exceeds one is rejected. See [`LIMITS.md`](LIMITS.md). |
 | No multi-module linking | The engine links one module into one instance; `register` and cross-module tests are not supported. This is the cause of most remaining spec failures. |
 | No post-MVP features | Sign extension, bulk memory, non-trapping conversions, multi-value, reference types, SIMD and tail calls are rejected as invalid. |
 | Host `libm` for `sqrt`/conversions | The float suites pass completely on the pinned corpus; the rounding edge case that was open earlier is not reproducible there any more. |
@@ -303,7 +303,7 @@ The CLI reads at most **1 MiB** (`RUNNER_FILE_MAX`) and provides a
 one-page linear-memory arena; a larger file is a usage error, and a
 module whose data does not fit the arena fails with a memory error. The
 embedded targets use their own, smaller budget (4 KiB) — see
-[`docs/LIMITS.md`](docs/LIMITS.md).
+[`LIMITS.md`](LIMITS.md).
 
 ## Conformance and fuzz tooling
 
@@ -343,8 +343,21 @@ output must match the native one byte for byte. The emitted modules are
 checked to be MVP-only (no sign extension, bulk memory, non-trapping
 conversions, multi-value, reference types, SIMD, mutable globals or
 imports). `make realworld-verify` runs the committed modules through the
-engine only, without a wasm toolchain. See
-[`realworld/README.md`](realworld/README.md).
+engine only, without a wasm toolchain.
+
+The wasm build needs `clang` with the `wasm32` target and `wasm-ld`.
+Where the distribution packages are not installed system-wide, they can
+be unpacked into a local prefix without root:
+
+```sh
+sh tools/setup_wasm_toolchain.sh          # lld + wabt + binaryen
+export PATH="$HOME/tools/root/usr/bin:$HOME/tools/root/usr/lib/llvm-18/bin:$PATH"
+```
+
+The programs live in `realworld/`; `realworld/expected.txt` holds the
+native outputs, and `tools/gen_realworld_data.py` regenerates the matrix
+and CRC-table data (with a CRC-32 self-check against the canonical
+vector `crc32("123456789") = 0xCBF43926`).
 
 CI gates: `make spec` (and `make spec-summary`) run the official spec
 suite and fail only on a regression against the numeric baseline in
@@ -352,6 +365,36 @@ suite and fail only on a regression against the numeric baseline in
 `make spec-report` keeps the raw runner behaviour (exit 1 on any
 unclassified failure). `make size-check` fails when the engine's
 `.text` grew by more than 5 % against `size_baseline.txt`.
+
+### Extended fuzzing runs
+
+The committed campaign reached the execution minimum (5,000,000 libFuzzer
+executions plus 2,000,000 mutation-loop iterations under ASan+UBSan, no
+crashes). A longer campaign runs unattended with the same harness:
+
+```sh
+# 24 h, four parallel libFuzzer jobs
+make CC=clang fuzz-build fuzz-corpus
+mkdir -p build/fuzz/extended
+for i in 1 2 3 4; do
+    mkdir -p build/fuzz/extended/job$i
+    cp build/fuzz/corpus/* build/fuzz/extended/job$i/ 2>/dev/null || true
+    nohup ./build/fuzz/libfuzzer_parse build/fuzz/extended/job$i \
+        -max_total_time=86400 -max_len=65536 -timeout=25 \
+        -rss_limit_mb=4096 -print_final_stats=1 \
+        -artifact_prefix=build/fuzz/extended/job$i/crash- \
+        > build/fuzz/extended/job$i/fuzz.log 2>&1 &
+done
+wait
+```
+
+Use `-max_total_time=172800` for 48 h. The AFL++ backend
+(`make CC=clang build/fuzz/afl_parse`, then `afl-fuzz -i build/fuzz/corpus
+-o build/fuzz/afl-out -- build/fuzz/afl_parse`) and the deterministic
+mutation loop (`make CC=clang build/fuzz/loop_driver_san`, then
+`./build/fuzz/loop_driver_san 42 100000000 demo/*.wasm`, which prints its
+seed so a run can be replayed) are the other two backends. A crash is
+minimized by `fuzz/mutate.py` and belongs in `tests/regression/`.
 
 The spec harness is `tools/run_spec_suite.py` and uses only Python 3's standard
 library. The user supplies `.wast` conversions; no binaries are bundled. A
@@ -365,11 +408,11 @@ the run. Unsupported JSON command forms are counted as skips and reported.
 
 Conformance evidence in this checkout is bounded by the absence of bundled
 `.json` inputs: the curated run reports 0 executed assertions and 23 skipped
-files until the user supplies conversions. `PHASE4_REPORT.md` records the
-measured fuzzing campaign (5,000,000 libFuzzer executions and 2,000,000
-mutation-loop iterations under ASan+UBSan, no crashes) and the spec-suite
-numbers. Sanitizer execution requires a compiler runtime providing ASan and
-UBSan; the reference MinGW host does not provide those libraries, while the
+files until the user supplies conversions. The measured numbers are in
+[`docs/SPEC_STATUS.md`](docs/SPEC_STATUS.md), the baseline in
+[`tests/spec/DEVIATIONS.md`](tests/spec/DEVIATIONS.md). Sanitizer
+execution requires a compiler runtime providing ASan and UBSan; the
+reference MinGW host does not provide those libraries, while the
 committed Ubuntu CI jobs use native GCC and Clang sanitizer runtimes.
 
 ```
@@ -515,7 +558,7 @@ passing assertion as well).
 | Validation control depth | 1024 (`WASM_MAX_CTRL_NESTING`, shared with execution) | `WASM_ERR_INVALID_BLOCK` |
 
 The exhaustive list, including the embedded overrides, is in
-[`docs/LIMITS.md`](docs/LIMITS.md).
+[`LIMITS.md`](LIMITS.md).
 
 Fuzz-smoke defaults are also overrideable at compile time: `FUZZ_MAX_BYTES`
 256, `FUZZ_PAGE_COUNT` 1, and `FUZZ_STEP_BUDGET` 10.
@@ -538,55 +581,26 @@ Guest linear memory and the module image live in application-owned buffers
 the engine only borrows, so an embedded target pays the ~82.6 KiB engine
 cost plus whatever arena it provisions.
 
-## Roadmap status
+## Feature status
 
-Phases 1–5 of the plan are implemented (delivered as incremental phases
-here): host integration works through the generic callback registry,
-proven with `print_i32`; the f32/f64 arithmetic gap is closed (Phase 1
-float work, proven by `test_phase7` + `demo/fadd.wasm`); globals, data
-segments and the start function are implemented (proven by
-`test_phase9` + `demo/hello.wasm`); tables, element segments and
-`call_indirect` are implemented (proven by `test_phase10` +
-`demo/dispatch2.wasm`), completing the full MVP section set. Phase 3
-brought the official spec suite into the loop, phase 4 hardened the
-engine against hostile input (nesting limit, branch-scan budget,
-sanitizers, fuzzers), and phase 5 proves the engine on **real compiler
-output** (`realworld/`: clang `--target=wasm32` modules that must match
-the native build byte for byte) and locks it into CI.
+The engine implements the **complete MVP section set** (type, import,
+function, table, memory, global, export, start, element, code, data) and
+the full MVP instruction set:
+
+| Area | Status | Proven by |
+|------|--------|-----------|
+| Host integration (callbacks, imports, exports) | implemented | `test_phase6` + `demo/print.wasm` |
+| f32/f64 arithmetic, conversions, reinterprets | implemented | `test_phase7` + `demo/fadd.wasm` |
+| Globals, data segments, start function | implemented | `test_phase9` + `demo/hello.wasm` |
+| Tables, element segments, `call_indirect` | implemented | `test_phase10` + `demo/dispatch2.wasm` |
+| `br_table`, `select` | implemented | `test_phase8` + `demo/dispatch.wasm` |
+| Static validation of every executable section | implemented | `test_phase11` |
+| Bounded nesting and branch-scan cost | implemented | `test_phase13` |
+| Real compiler output (clang `--target=wasm32`) | verified byte for byte against the native build | `realworld/` + `test_phase14` |
 
 Deliberately still open: multi-module linking, post-MVP proposals
 (multi-value, bulk memory, reference types, SIMD), UTF-8 name
 validation, and physical deployment to an ESP32/STM32 target (GPIO/LED
 bindings would register through the existing host table).
 
-## Baseline status (`v0.0.0-baseline`, 2026-10-11)
-
-*Historical record of the first release; the current status is the
-sections above.*
-
-What works (measured, `mingw32-make CC=gcc test` on MinGW gcc 8.1.0):
-warning-free build under `-std=c11 -Wall -Wextra -Wpedantic -Werror`;
-`TOTAL: 681 passed, 0 failed` across all 7 suites (phase1..6 = 666 as
-previously claimed — claim confirmed, no discrepancy — plus 15 new CLI checks).
-
-What was fixed for this baseline: `Makefile` gains the invariant-mandated
-`-Wpedantic` (was missing); `src/main.c` i64 printing no longer uses
-`PRId64`, which `-Wpedantic` rejects on MinGW (`ms_printf` `I64` modifier),
-rendering decimals with plain `%s` instead — covered by `tests/test_cli.c`.
-`make test` now prints per-suite `RESULT` lines plus a final
-`TOTAL: X passed, Y failed` and exits non-zero on any failure (verified
-with a missing-suite negative check). The empty leftover `-p/` directory
-was deleted. `Plan.md` (referenced above and in Layout) is absent from the
-source dump, so it is not tracked; `PROJECT_ARCHITECTURE.md` (forensic
-analysis found in the dump) is tracked.
-
-Still missing as of this baseline (float arithmetic, br_table/select,
-globals, data, start, tables, and indirect calls since closed, see above):
-module validation
-beyond header/sections/imports, fuzzing, CI. Known deviation: a function
-body's trailing `end` byte traps (`WASM_TRAP_CONTROL_STACK_UNDERFLOW` —
-no implicit function-level block), so tool-produced modules must be emitted
-without it, as `demo/add.wasm` already is. Older capacity constants are not
-yet `#ifndef`-guarded (invariant I5 gap, pre-existing); the new
-`WASM_MAX_BR_TABLE_LABELS` is guarded and `-D` overridable.
 # Embedded-Wasm-Engine
