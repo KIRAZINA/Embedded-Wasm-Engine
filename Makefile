@@ -57,7 +57,19 @@ ARM_AR    ?= arm-none-eabi-ar
 ARM_BUILD = $(BUILD)/arm
 ARM_OBJECTS = $(patsubst src/%.c,$(ARM_BUILD)/%.o,$(SRC))
 ARM_CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude \
-             -mcpu=cortex-m4 -mthumb -Os -ffreestanding -ffunction-sections -fdata-sections
+             -mcpu=cortex-m4 -mthumb -Os -ffreestanding -ffunction-sections -fdata-sections \
+             -DRUNNER_FILE_MAX=4096u -DSTM32F4_VM_BUDGET_BYTES=114688u
+
+# Embedded configuration check: build the Cortex-M demo with the embedded
+# flags using the host compiler, so the embedded overrides stay verified
+# even when arm-none-eabi-gcc is not installed.
+embedded-check:
+	$(MKDIR_P)
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -Os -ffreestanding \
+	    -DRUNNER_FILE_MAX=4096u -DSTM32F4_VM_BUDGET_BYTES=114688u \
+	    $(SRC) targets/stm32/embedded_demo.c targets/stm32/demo_add_wasm.c \
+	    -o $(BUILD)/embedded_demo_host -lm
+	@echo "[embedded-check] OK (host build of the Cortex-M configuration)"
 
 all: $(RUNNER) $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(T8) $(T9) $(T10) $(T11) $(T12) $(T13) $(TCLI)
 
