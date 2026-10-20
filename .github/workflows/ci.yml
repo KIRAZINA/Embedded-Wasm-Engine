@@ -5,52 +5,33 @@ on:
   pull_request:
 
 jobs:
-  unix-build-test:
-    name: ${{ matrix.os }} / ${{ matrix.cc }}
-    runs-on: ${{ matrix.os }}
+  # ---------------------------------------------------------------------------
+  # Build and test matrix: {gcc, clang} x {-O0, -O2}
+  # ---------------------------------------------------------------------------
+  build-test:
+    name: build-test / ${{ matrix.cc }} / ${{ matrix.opt }}
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            cc: gcc
-          - os: ubuntu-latest
-            cc: clang
-          - os: macos-latest
-            cc: clang
+        cc: [gcc, clang]
+        opt: [-O0, -O2]
     steps:
       - uses: actions/checkout@v4
       - name: Install compiler and tools
-        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y make ${{ matrix.cc }}
       - name: Build
-        run: make CC=${{ matrix.cc }}
+        run: make CC=${{ matrix.cc }} CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude ${{ matrix.opt }}" all
       - name: Test
-        run: make CC=${{ matrix.cc }} test
+        run: make CC=${{ matrix.cc }} CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude ${{ matrix.opt }}" test
+      - name: Parity
+        run: make CC=${{ matrix.cc }} CFLAGS="-std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude ${{ matrix.opt }}" parity
 
-  windows-mingw:
-    name: windows / mingw-w64
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: msys2/setup-msys2@v2
-        with:
-          msystem: MINGW64
-          update: true
-          install: >-
-            make
-            mingw-w64-x86_64-gcc
-            python
-      - name: Build
-        run: make OS= CC=gcc PYTHON=python
-      - name: Test
-        run: make OS= CC=gcc PYTHON=python test
-
-  sanitize:
-    name: sanitize / ${{ matrix.cc }}
+  # ---------------------------------------------------------------------------
+  # Sanitizers: ASan + UBSan build, unit suite and spec smoke
+  # ---------------------------------------------------------------------------
+  sanitizers:
+    name: sanitizers / ${{ matrix.cc }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -63,6 +44,74 @@ jobs:
       - name: Sanitized build, tests and spec smoke
         run: make CC=${{ matrix.cc }} sanitizers
 
+  # ---------------------------------------------------------------------------
+  # Spec suite: fetch the official corpus (cached), run it, upload the
+  # summary and fail only on a regression against the numeric baseline
+  # in tests/spec/DEVIATIONS.md
+  # ---------------------------------------------------------------------------
+  spec-suite:
+    name: spec suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y make gcc wabt
+      - name: Cache the spec corpus
+        id: spec-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            tests/spec/upstream
+            tests/spec/json
+          key: spec-corpus-${{ hashFiles('tools/fetch_spec_tests.sh') }}
+      - name: Fetch the spec corpus
+        if: steps.spec-cache.outputs.cache-hit != 'true'
+        run: sh tools/fetch_spec_tests.sh
+      - name: Run the spec suite and check the baseline
+        run: make CC=gcc spec-summary
+      - name: Upload the spec summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spec-summary
+          path: build/spec_summary.txt
+          if-no-files-found: warn
+
+  # ---------------------------------------------------------------------------
+  # Size: the engine footprint must not grow by more than 5 %
+  # ---------------------------------------------------------------------------
+  size:
+    name: static footprint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler and tools
+        run: sudo apt-get update && sudo apt-get install -y make gcc binutils
+      - name: Measure the engine objects (-Os, freestanding)
+        run: sh tools/size_measure.sh | tee build/size_measured.txt
+      - name: Check against size_baseline.txt
+        run: make CC=gcc size-check
+      - name: Report the struct footprint
+        run: make CC=gcc size-report
+
+  # ---------------------------------------------------------------------------
+  # Real-world modules: the committed clang output must run correctly
+  # ---------------------------------------------------------------------------
+  realworld:
+    name: real-world modules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install compiler and tools
+        run: sudo apt-get update && sudo apt-get install -y make gcc clang lld wabt
+      - name: Run the committed modules through the engine
+        run: make CC=clang realworld-verify
+      - name: Rebuild and compare against the native build
+        run: make CC=clang realworld
+
+  # ---------------------------------------------------------------------------
+  # Invariants and fuzzing
+  # ---------------------------------------------------------------------------
   no-alloc:
     name: zero dynamic allocation
     runs-on: ubuntu-latest
@@ -93,6 +142,9 @@ jobs:
       - name: Corpus mutation driver
         run: make CC=gcc fuzz-mutate MUT_ROUNDS=2
 
+  # ---------------------------------------------------------------------------
+  # Embedded target
+  # ---------------------------------------------------------------------------
   cross-arm:
     name: Cortex-M4 cross build
     runs-on: ubuntu-latest
@@ -105,12 +157,35 @@ jobs:
       - name: Check artifacts
         run: test -s build/arm/libwasm_engine.a && test -s build/arm/embedded_demo.elf
 
-  size-report:
-    name: static footprint
+  embedded-check:
+    name: embedded configuration (host build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Install compiler and tools
         run: sudo apt-get update && sudo apt-get install -y make gcc
-      - name: Build and print footprint
-        run: make CC=gcc size-report
+      - name: Build the Cortex-M configuration with the host compiler
+        run: make CC=gcc embedded-check
+
+  windows-mingw:
+    name: windows / mingw-w64
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            make
+            mingw-w64-x86_64-gcc
+            python
+      - name: Build
+        run: make OS= CC=gcc PYTHON=python
+      - name: Test
+        run: make OS= CC=gcc PYTHON=python test
+      - name: Real-world modules (engine only)
+        run: make OS= CC=gcc PYTHON=python realworld-verify
