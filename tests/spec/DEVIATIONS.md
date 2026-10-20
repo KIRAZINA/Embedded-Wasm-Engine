@@ -40,3 +40,28 @@ Every entry is explicitly classified and justified. Silently ignored = violation
 
 ## Unfixable / ambiguous (for curator decision — do not hack around)
 - [None identified yet; to be filled by triage loop.]
+
+## Numeric baseline (CI regression gate)
+
+The numbers below are the reference result of the full official spec
+suite (65 suites) on the reference toolchain (gcc 13.3 / clang 18.1,
+Ubuntu 24.04 corpus). `tools/check_spec_baseline.py` runs the suite and
+fails when the number of passing assertions drops or when a failure
+class grows — a regression gate, not a claim of full conformance.
+
+```text
+total_pass = 16432
+total_fail = 3804
+CLASS VALIDATOR_BUG:rejects-valid = 130
+CLASS VALIDATOR_BUG:accepts-assert_invalid = 97
+CLASS ENGINE_BUG:mismatch = 575
+CLASS KNOWN_DEVIATION:dead-instance = 2729
+```
+
+The remaining failures are the documented gaps above: multi-module
+linking, externref and multi-table support, post-MVP opcodes and
+UTF-8 name checking. Phase 4 fixed the element-section encoding, which
+moved 15 `rejects-valid` cases to *passing* and unblocked 17 further
+`ENGINE_BUG:mismatch` cases (modules that now load and expose a
+different pre-existing weakness). Phase 5 fixed the typed-local
+default, which turned 11 of those mismatches into passing assertions.

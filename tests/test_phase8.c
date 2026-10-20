@@ -19,14 +19,8 @@
 #include <string.h>
 
 #include "wasm_vm.h"
+#include "harness.h"
 
-static int g_pass = 0;
-static int g_fail = 0;
-
-#define CHECK(cond, name) do { \
-    if (cond) { printf("  [PASS] %s\n", (name)); g_pass++; } \
-    else { printf("  [FAIL] %s (line %d)\n", (name), __LINE__); g_fail++; } \
-} while (0)
 
 static wasm_vm_t g_vm;
 
@@ -631,28 +625,24 @@ static void test_cli_dispatch(void)
 
 int main(void)
 {
+    static const harness_test_t tests[] = {
+        { "all_arms", test_all_arms },
+        { "index_unsigned", test_index_unsigned },
+        { "n0_default_only", test_n0_default_only },
+        { "loop_target", test_loop_target },
+        { "valued_carry", test_valued_carry },
+        { "malformed", test_malformed },
+        { "scanner", test_scanner },
+        { "select_i32", test_select_i32 },
+        { "select_i64", test_select_i64 },
+        { "select_f32", test_select_f32 },
+        { "select_f64", test_select_f64 },
+        { "select_traps", test_select_traps },
+        { "select_stack", test_select_stack },
+        { "drop", test_drop },
+        { "cli_dispatch", test_cli_dispatch },
+    };
     printf("=== Phase 8 tests: br_table + select ===\n");
-    test_all_arms();
-    test_index_unsigned();
-    test_n0_default_only();
-    test_loop_target();
-    test_valued_carry();
-    test_malformed();
-    test_scanner();
-    test_select_i32();
-    test_select_i64();
-    test_select_f32();
-    test_select_f64();
-    test_select_traps();
-    test_select_stack();
-    test_drop();
-    test_cli_dispatch();
-    printf("--------------------------------------------\n");
-    printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
-    if (g_fail != 0) {
-        printf("STATUS: FAIL\n");
-        return 1;
-    }
-    printf("STATUS: ALL TESTS PASSED\n");
-    return 0;
+    return harness_run("phase8", tests,
+                       sizeof(tests) / sizeof(tests[0]));
 }

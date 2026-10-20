@@ -13,14 +13,8 @@
 
 #include "wasm_frame.h"
 #include "wasm_vm.h"
+#include "harness.h"
 
-static int g_pass = 0;
-static int g_fail = 0;
-
-#define CHECK(cond, name) do { \
-    if (cond) { printf("  [PASS] %s\n", (name)); g_pass++; } \
-    else { printf("  [FAIL] %s (line %d)\n", (name), __LINE__); g_fail++; } \
-} while (0)
 
 /* ~50 KiB VM — static, never on the function-call stack. */
 static wasm_vm_t g_vm;
@@ -298,20 +292,16 @@ static void test_footprint(void)
 
 int main(void)
 {
+    static const harness_test_t tests[] = {
+        { "enter_basic", test_enter_basic },
+        { "nested_calls", test_nested_calls },
+        { "call_overflow", test_call_overflow },
+        { "call_underflow", test_call_underflow },
+        { "locals_ops", test_locals_ops },
+        { "height_restoration", test_height_restoration },
+        { "footprint", test_footprint },
+    };
     printf("=== Phase 3 tests: frames + call stack + VM enter/exit ===\n");
-    test_enter_basic();
-    test_nested_calls();
-    test_call_overflow();
-    test_call_underflow();
-    test_locals_ops();
-    test_height_restoration();
-    test_footprint();
-    printf("--------------------------------------------\n");
-    printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
-    if (g_fail != 0) {
-        printf("STATUS: FAIL\n");
-        return 1;
-    }
-    printf("STATUS: ALL TESTS PASSED\n");
-    return 0;
+    return harness_run("phase3", tests,
+                       sizeof(tests) / sizeof(tests[0]));
 }

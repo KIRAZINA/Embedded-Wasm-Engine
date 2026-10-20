@@ -2,10 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-static unsigned pass_count;
-static unsigned fail_count;
-
-#define CHECK(c, n) do { if (c) pass_count++; else { printf("FAIL: %s\n", n); fail_count++; } } while (0)
+#include "harness.h"
 
 #ifdef _WIN32
 #define RUNNER "build\\wasm_runner.exe"
@@ -31,7 +28,7 @@ static int output_contains(const char *want, int exact_one_line)
     return strstr(buf, want) != NULL && (!exact_one_line || lines == 1u);
 }
 
-int main(void)
+static void test_cli_tooling(void)
 {
     int rc;
     rc = system(RUNNER " --version" REDIR);
@@ -50,7 +47,12 @@ int main(void)
     CHECK(rc != 0 && output_contains("type does not match", 0), "f64 typed argument parsed");
     rc = system(OP_MATRIX);
     CHECK(rc == 0, "opcode matrix generator");
-    printf("RESULT: %u passed, %u failed\n", pass_count, fail_count);
-    printf("STATUS: %s\n", fail_count == 0u ? "ALL TESTS PASSED" : "FAIL");
-    return fail_count == 0u ? 0 : 1;
+}
+
+int main(void)
+{
+    static const harness_test_t tests[] = {
+        { "cli_tooling", test_cli_tooling },
+    };
+    return harness_run("phase12", tests, sizeof(tests) / sizeof(tests[0]));
 }

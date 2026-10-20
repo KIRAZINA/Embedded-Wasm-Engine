@@ -218,6 +218,17 @@ $(SPEC_RUNNER_BIN): $(SRC) src/main.c include/version.h
 spec: $(SPEC_RUNNER_BIN)
 	$(PYTHON) tools/run_spec_suite.py --runner $(SPEC_RUNNER_BIN) tests/spec/json/*.json
 
+# Run the spec suite, keep the summary and check it against the numeric
+# baseline in tests/spec/DEVIATIONS.md. The suite itself still has
+# documented failures, so the job fails only on a regression.
+spec-summary: $(SPEC_RUNNER_BIN)
+	-$(PYTHON) tools/run_spec_suite.py --runner $(SPEC_RUNNER_BIN) tests/spec/json/*.json | tee $(BUILD)/spec_summary.txt
+	$(PYTHON) tools/check_spec_baseline.py --summary $(BUILD)/spec_summary.txt
+
+# Engine footprint against the committed baseline (5 % tolerance).
+size-check:
+	$(PYTHON) tools/check_size_baseline.py
+
 size-report: tools/size_report.c
 	$(MKDIR_P)
 	$(CC) $(CFLAGS) tools/size_report.c -o $(BUILD)/size_report $(LDLIBS)
@@ -398,4 +409,4 @@ clean:
 	rm -rf $(BUILD)
 endif
 
-.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 test13 test14 testcli runner fuzz parity spec size-report arm-cross embedded-check asan ubsan sanitizers san-run sanitize clean
+.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 test13 test14 testcli runner fuzz parity spec spec-summary size-check size-report arm-cross embedded-check asan ubsan sanitizers san-run sanitize clean

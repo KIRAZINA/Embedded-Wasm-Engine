@@ -12,14 +12,8 @@
 #include <string.h>
 
 #include "wasm_vm.h"
+#include "harness.h"
 
-static int g_pass = 0;
-static int g_fail = 0;
-
-#define CHECK(cond, name) do { \
-    if (cond) { printf("  [PASS] %s\n", (name)); g_pass++; } \
-    else { printf("  [FAIL] %s (line %d)\n", (name), __LINE__); g_fail++; } \
-} while (0)
 
 /* Static VM + 1-page arena (never malloc'd). */
 static wasm_vm_t g_vm;
@@ -1025,24 +1019,20 @@ static void test_footprint(void)
 
 int main(void)
 {
+    static const harness_test_t tests[] = {
+        { "arith_basic", test_arith_basic },
+        { "div_by_zero", test_div_by_zero },
+        { "min_div_neg1", test_min_div_neg1 },
+        { "bits_shifts", test_bits_shifts },
+        { "compare", test_compare },
+        { "mem_ops", test_mem_ops },
+        { "mem_float", test_mem_float },
+        { "mem_extended", test_mem_extended },
+        { "bitops_i64", test_bitops_i64 },
+        { "consts_locals_traps", test_consts_locals_traps },
+        { "footprint", test_footprint },
+    };
     printf("=== Phase 4 tests: execution core (i32 ALU, compare, mem) ===\n");
-    test_arith_basic();
-    test_div_by_zero();
-    test_min_div_neg1();
-    test_bits_shifts();
-    test_compare();
-    test_mem_ops();
-    test_mem_float();
-    test_mem_extended();
-    test_bitops_i64();
-    test_consts_locals_traps();
-    test_footprint();
-    printf("--------------------------------------------\n");
-    printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
-    if (g_fail != 0) {
-        printf("STATUS: FAIL\n");
-        return 1;
-    }
-    printf("STATUS: ALL TESTS PASSED\n");
-    return 0;
+    return harness_run("phase4", tests,
+                       sizeof(tests) / sizeof(tests[0]));
 }

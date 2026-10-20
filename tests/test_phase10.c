@@ -24,14 +24,8 @@
 #include "wasm_memory.h"
 #include "wasm_parser.h"
 #include "wasm_vm.h"
+#include "harness.h"
 
-static int g_pass = 0;
-static int g_fail = 0;
-
-#define CHECK(cond, name) do { \
-    if (cond) { printf("  [PASS] %s\n", (name)); g_pass++; } \
-    else { printf("  [FAIL] %s (line %d)\n", (name), __LINE__); g_fail++; } \
-} while (0)
 
 static wasm_vm_t g_vm;
 static wasm_host_registry_t g_reg;
@@ -806,29 +800,25 @@ static void test_cli_dispatch2(void)
 
 int main(void)
 {
+    static const harness_test_t tests[] = {
+        { "dispatch", test_dispatch },
+        { "sig_matrix", test_sig_matrix },
+        { "offsets", test_offsets },
+        { "recursion", test_recursion },
+        { "table_malformed", test_table_malformed },
+        { "element_malformed", test_element_malformed },
+        { "element_trailing", test_element_trailing },
+        { "import_table", test_import_table },
+        { "host_indirect", test_host_indirect },
+        { "host_trap_propagates", test_host_trap_propagates },
+        { "typed_api_validation", test_typed_api_validation },
+        { "overwrite_order", test_overwrite_order },
+        { "reinstantiate_reset", test_reinstantiate_reset },
+        { "scanner_indirect", test_scanner_indirect },
+        { "typed_host_nullary", test_typed_host_nullary },
+        { "cli_dispatch2", test_cli_dispatch2 },
+    };
     printf("=== Phase 10 tests: tables, elements, call_indirect ===\n");
-    test_dispatch();
-    test_sig_matrix();
-    test_offsets();
-    test_recursion();
-    test_table_malformed();
-    test_element_malformed();
-    test_element_trailing();
-    test_import_table();
-    test_host_indirect();
-    test_host_trap_propagates();
-    test_typed_api_validation();
-    test_overwrite_order();
-    test_reinstantiate_reset();
-    test_scanner_indirect();
-    test_typed_host_nullary();
-    test_cli_dispatch2();
-    printf("--------------------------------------------\n");
-    printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
-    if (g_fail != 0) {
-        printf("STATUS: FAIL\n");
-        return 1;
-    }
-    printf("STATUS: ALL TESTS PASSED\n");
-    return 0;
+    return harness_run("phase10", tests,
+                       sizeof(tests) / sizeof(tests[0]));
 }

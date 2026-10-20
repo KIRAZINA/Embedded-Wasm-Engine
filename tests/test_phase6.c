@@ -15,14 +15,8 @@
 #include "wasm_host.h"
 #include "wasm_parser.h"
 #include "wasm_vm.h"
+#include "harness.h"
 
-static int g_pass = 0;
-static int g_fail = 0;
-
-#define CHECK(cond, name) do { \
-    if (cond) { printf("  [PASS] %s\n", (name)); g_pass++; } \
-    else { printf("  [FAIL] %s (line %d)\n", (name), __LINE__); g_fail++; } \
-} while (0)
 
 static wasm_vm_t g_vm;
 static wasm_host_registry_t g_reg;
@@ -598,21 +592,17 @@ static void test_cli_dump(void)
 
 int main(void)
 {
+    static const harness_test_t tests[] = {
+        { "host_call", test_host_call },
+        { "export_lookup", test_export_lookup },
+        { "whole_module_call", test_whole_module_call },
+        { "link_errors", test_link_errors },
+        { "guest_calls_host", test_guest_calls_host },
+        { "memory_and_footprint", test_memory_and_footprint },
+        { "i64_alu", test_i64_alu },
+        { "cli_dump", test_cli_dump },
+    };
     printf("=== Phase 6 tests: host integration + import/export link ===\n");
-    test_host_call();
-    test_export_lookup();
-    test_whole_module_call();
-    test_link_errors();
-    test_guest_calls_host();
-    test_memory_and_footprint();
-    test_i64_alu();
-    test_cli_dump();
-    printf("--------------------------------------------\n");
-    printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
-    if (g_fail != 0) {
-        printf("STATUS: FAIL\n");
-        return 1;
-    }
-    printf("STATUS: ALL TESTS PASSED\n");
-    return 0;
+    return harness_run("phase6", tests,
+                       sizeof(tests) / sizeof(tests[0]));
 }

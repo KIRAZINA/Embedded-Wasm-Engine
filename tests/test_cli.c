@@ -23,14 +23,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "harness.h"
 
-static int g_pass = 0;
-static int g_fail = 0;
-
-#define CHECK(cond, name) do { \
-    if (cond) { printf("  [PASS] %s\n", (name)); g_pass++; } \
-    else { printf("  [FAIL] %s (line %d)\n", (name), __LINE__); g_fail++; } \
-} while (0)
 
 #ifdef _WIN32
 #define RUNNER "build\\wasm_runner.exe"
@@ -222,21 +216,22 @@ static void test_mem_import(void)
           "typed unsupported-memory error printed");
 }
 
-int main(void)
+static void test_result_rendering(void)
 {
-    printf("=== CLI tests: runner i64 result printing ===\n");
     run_case("pos42", kMod42, sizeof(kMod42), "result: 42 (i64)");
     run_case("neg1", kModNeg1, sizeof(kModNeg1), "result: -1 (i64)");
     run_case("min", kModMin, sizeof(kModMin),
              "result: -9223372036854775808 (i64)");
-    test_validation();
-    test_mem_import();
-    printf("--------------------------------------------\n");
-    printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
-    if (g_fail != 0) {
-        printf("STATUS: FAIL\n");
-        return 1;
-    }
-    printf("STATUS: ALL TESTS PASSED\n");
-    return 0;
+}
+
+int main(void)
+{
+    static const harness_test_t tests[] = {
+        { "result_rendering", test_result_rendering },
+        { "validation", test_validation },
+        { "mem_import", test_mem_import },
+    };
+    printf("=== CLI tests: runner i64 result printing ===\n");
+    return harness_run("cli", tests,
+                       sizeof(tests) / sizeof(tests[0]));
 }

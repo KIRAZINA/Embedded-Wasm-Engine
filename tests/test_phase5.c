@@ -12,14 +12,8 @@
 
 #include "wasm_control.h"
 #include "wasm_vm.h"
+#include "harness.h"
 
-static int g_pass = 0;
-static int g_fail = 0;
-
-#define CHECK(cond, name) do { \
-    if (cond) { printf("  [PASS] %s\n", (name)); g_pass++; } \
-    else { printf("  [FAIL] %s (line %d)\n", (name), __LINE__); g_fail++; } \
-} while (0)
 
 /* Static VM (~103 KiB — never on the call stack). */
 static wasm_vm_t g_vm;
@@ -476,21 +470,17 @@ static void test_footprint(void)
 
 int main(void)
 {
+    static const harness_test_t tests[] = {
+        { "block_br", test_block_br },
+        { "loop_counter", test_loop_counter },
+        { "if_else", test_if_else },
+        { "factorial", test_factorial },
+        { "call", test_call },
+        { "call_return", test_call_return },
+        { "control_traps", test_control_traps },
+        { "footprint", test_footprint },
+    };
     printf("=== Phase 5 tests: structured control flow + CALL ===\n");
-    test_block_br();
-    test_loop_counter();
-    test_if_else();
-    test_factorial();
-    test_call();
-    test_call_return();
-    test_control_traps();
-    test_footprint();
-    printf("--------------------------------------------\n");
-    printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
-    if (g_fail != 0) {
-        printf("STATUS: FAIL\n");
-        return 1;
-    }
-    printf("STATUS: ALL TESTS PASSED\n");
-    return 0;
+    return harness_run("phase5", tests,
+                       sizeof(tests) / sizeof(tests[0]));
 }

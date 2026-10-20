@@ -25,14 +25,8 @@
 
 #include "wasm_memory.h"
 #include "wasm_vm.h"
+#include "harness.h"
 
-static int g_pass = 0;
-static int g_fail = 0;
-
-#define CHECK(cond, name) do { \
-    if (cond) { printf("  [PASS] %s\n", (name)); g_pass++; } \
-    else { printf("  [FAIL] %s (line %d)\n", (name), __LINE__); g_fail++; } \
-} while (0)
 
 static wasm_vm_t g_vm;
 
@@ -1102,36 +1096,32 @@ static void test_cli_float(void)
 
 int main(void)
 {
+    static const harness_test_t tests[] = {
+        { "const", test_const },
+        { "arith32", test_arith32 },
+        { "arith64", test_arith64 },
+        { "sqrt", test_sqrt },
+        { "minmax32", test_minmax32 },
+        { "minmax64", test_minmax64 },
+        { "sign32", test_sign32 },
+        { "sign64", test_sign64 },
+        { "round32", test_round32 },
+        { "round64", test_round64 },
+        { "nearest32", test_nearest32 },
+        { "nearest64", test_nearest64 },
+        { "cmp32", test_cmp32 },
+        { "cmp64", test_cmp64 },
+        { "trunc_f32_to_i32", test_trunc_f32_to_i32 },
+        { "trunc_f64_to_i32", test_trunc_f64_to_i32 },
+        { "trunc_f32_to_i64", test_trunc_f32_to_i64 },
+        { "trunc_f64_to_i64", test_trunc_f64_to_i64 },
+        { "convert", test_convert },
+        { "reinterpret", test_reinterpret },
+        { "nan_prop", test_nan_prop },
+        { "mem_nan", test_mem_nan },
+        { "cli_float", test_cli_float },
+    };
     printf("=== Phase 7 tests: f32/f64 MVP instruction set ===\n");
-    test_const();
-    test_arith32();
-    test_arith64();
-    test_sqrt();
-    test_minmax32();
-    test_minmax64();
-    test_sign32();
-    test_sign64();
-    test_round32();
-    test_round64();
-    test_nearest32();
-    test_nearest64();
-    test_cmp32();
-    test_cmp64();
-    test_trunc_f32_to_i32();
-    test_trunc_f64_to_i32();
-    test_trunc_f32_to_i64();
-    test_trunc_f64_to_i64();
-    test_convert();
-    test_reinterpret();
-    test_nan_prop();
-    test_mem_nan();
-    test_cli_float();
-    printf("--------------------------------------------\n");
-    printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
-    if (g_fail != 0) {
-        printf("STATUS: FAIL\n");
-        return 1;
-    }
-    printf("STATUS: ALL TESTS PASSED\n");
-    return 0;
+    return harness_run("phase7", tests,
+                       sizeof(tests) / sizeof(tests[0]));
 }

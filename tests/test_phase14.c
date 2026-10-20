@@ -29,14 +29,8 @@
 #include "wasm_parser.h"
 #include "wasm_validate.h"
 #include "wasm_vm.h"
+#include "harness.h"
 
-static int g_pass;
-static int g_fail;
-
-#define CHECK(cond, name) do { \
-    if (cond) { printf("  [PASS] %s\n", (name)); g_pass++; } \
-    else { printf("  [FAIL] %s (line %d)\n", (name), __LINE__); g_fail++; } \
-} while (0)
 
 static wasm_vm_t g_vm;
 static wasm_host_registry_t g_reg;
@@ -204,13 +198,13 @@ static void test_typed_local_default(void)
 
 int main(void)
 {
+    static const harness_test_t tests[] = {
+        { "realworld_qsort", test_realworld_qsort },
+        { "realworld_matmul", test_realworld_matmul },
+        { "realworld_crc32", test_realworld_crc32 },
+        { "typed_local_default", test_typed_local_default },
+    };
     printf("=== Phase 14 tests: real-world modules and typed locals ===\n");
-    test_realworld_qsort();
-    test_realworld_matmul();
-    test_realworld_crc32();
-    test_typed_local_default();
-    printf("--------------------------------------------\n");
-    printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
-    printf("STATUS: %s\n", g_fail == 0 ? "ALL TESTS PASSED" : "FAIL");
-    return g_fail == 0 ? 0 : 1;
+    return harness_run("phase14", tests,
+                       sizeof(tests) / sizeof(tests[0]));
 }

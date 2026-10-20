@@ -15,14 +15,8 @@
 #include "wasm_memory.h"
 #include "wasm_stack.h"
 #include "wasm_types.h"
+#include "harness.h"
 
-static int g_pass = 0;
-static int g_fail = 0;
-
-#define CHECK(cond, name) do { \
-    if (cond) { printf("  [PASS] %s\n", (name)); g_pass++; } \
-    else { printf("  [FAIL] %s (line %d)\n", (name), __LINE__); g_fail++; } \
-} while (0)
 
 /* Statically allocated (never malloc): 16 KiB stack + arenas. */
 static wasm_stack_t g_stack;
@@ -292,20 +286,16 @@ static void test_footprint(void)
 
 int main(void)
 {
+    static const harness_test_t tests[] = {
+        { "stack_basic_types", test_stack_basic_types },
+        { "stack_traps", test_stack_traps },
+        { "memory_le_accuracy", test_memory_le_accuracy },
+        { "memory_oob_boundaries", test_memory_oob_boundaries },
+        { "memory_wraparound", test_memory_wraparound },
+        { "memory_grow", test_memory_grow },
+        { "footprint", test_footprint },
+    };
     printf("=== Phase 2 tests: stack + linear memory + traps ===\n");
-    test_stack_basic_types();
-    test_stack_traps();
-    test_memory_le_accuracy();
-    test_memory_oob_boundaries();
-    test_memory_wraparound();
-    test_memory_grow();
-    test_footprint();
-    printf("--------------------------------------------\n");
-    printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
-    if (g_fail != 0) {
-        printf("STATUS: FAIL\n");
-        return 1;
-    }
-    printf("STATUS: ALL TESTS PASSED\n");
-    return 0;
+    return harness_run("phase2", tests,
+                       sizeof(tests) / sizeof(tests[0]));
 }

@@ -25,14 +25,8 @@
 #include "wasm_parser.h"
 #include "wasm_validate.h"
 #include "wasm_vm.h"
+#include "harness.h"
 
-static int g_pass;
-static int g_fail;
-
-#define CHECK(cond, name) do { \
-    if (cond) { printf("  [PASS] %s\n", (name)); g_pass++; } \
-    else { printf("  [FAIL] %s (line %d)\n", (name), __LINE__); g_fail++; } \
-} while (0)
 
 static wasm_vm_t g_vm;
 static wasm_host_registry_t g_reg;
@@ -341,13 +335,13 @@ static void test_scan_budget(void)
 
 int main(void)
 {
+    static const harness_test_t tests[] = {
+        { "validator_nesting_limit", test_validator_nesting_limit },
+        { "runtime_nesting_limit", test_runtime_nesting_limit },
+        { "control_pool_is_global", test_control_pool_is_global },
+        { "scan_budget", test_scan_budget },
+    };
     printf("=== Phase 13 tests: nesting limit and scan budget ===\n");
-    test_validator_nesting_limit();
-    test_runtime_nesting_limit();
-    test_control_pool_is_global();
-    test_scan_budget();
-    printf("--------------------------------------------\n");
-    printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
-    printf("STATUS: %s\n", g_fail == 0 ? "ALL TESTS PASSED" : "FAIL");
-    return g_fail == 0 ? 0 : 1;
+    return harness_run("phase13", tests,
+                       sizeof(tests) / sizeof(tests[0]));
 }
