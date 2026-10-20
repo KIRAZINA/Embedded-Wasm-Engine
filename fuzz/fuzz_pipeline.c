@@ -68,7 +68,7 @@ static void fuzz_run_function(uint32_t idx, uint32_t budget)
 {
     const wasm_func_desc_t *d;
     wasm_frame_t *top = NULL;
-    uint64_t scan_cursor = 0u;
+    uint64_t scan_cursor;
 
     if (idx >= (uint32_t)WASM_MAX_FUNCTIONS) {
         return;
@@ -77,6 +77,9 @@ static void fuzz_run_function(uint32_t idx, uint32_t budget)
     if (!d->valid || d->is_host || d->param_count != 0u) {
         return;
     }
+    /* The scan counter is cumulative per VM: start from the current
+     * value so earlier functions are not charged twice. */
+    scan_cursor = g_vm.scan_bytes;
     /* Fresh operand stack per function: leftovers from a previous
      * (trapped) run must never influence the next one. */
     (void)wasm_stack_init(&g_vm.operands);

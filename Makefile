@@ -259,12 +259,15 @@ $(FUZZ_BUILD)/afl_parse: $(FUZZ_SRC) fuzz/fuzz_pipeline.c fuzz/afl_entry.c
 
 fuzz-build: $(FUZZ_BUILD)/parse_harness $(FUZZ_BUILD)/loop_driver
 
-# Seed corpus: the demo modules plus a sample of the official spec corpus.
+# Seed corpus: the demo modules plus a spread sample of the official spec
+# corpus (every 14th module, so the sample covers every suite instead of
+# only the alphabetically first ones).
 fuzz-corpus: fuzz-build
 	$(FUZZ_CORPUS_MKDIR)
 	cp demo/*.wasm $(FUZZ_CORPUS)/ 2>/dev/null || true
-	@for f in $$(ls tests/spec/json/*.wasm 2>/dev/null | head -200); do \
-	    cp "$$f" $(FUZZ_CORPUS)/ 2>/dev/null || true; \
+	@i=0; for f in $$(ls tests/spec/json/*.wasm 2>/dev/null); do \
+	    i=$$((i+1)); \
+	    if [ $$((i % 14)) -eq 0 ]; then cp "$$f" $(FUZZ_CORPUS)/ 2>/dev/null || true; fi; \
 	done
 
 # libFuzzer backend: the shared pipeline, seeded with the valid corpus.
