@@ -4,8 +4,8 @@
 /*
  * tests/harness.h — the shared test harness.
  *
- * A small, dependency-free (stdio only), zero-allocation harness for
- * the engine's test suites:
+ * A small harness with no dependencies beyond stdio and no dynamic
+ * allocation for the engine's test suites:
  *
  *   - test registration: a table of named test functions,
  *   - pass/fail counters for tests and assertions,

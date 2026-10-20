@@ -114,11 +114,17 @@ wasm_trap_t wasm_vm_enter_function(wasm_vm_t *vm, uint32_t func_idx,
      * the i32 type for every local would trap a program that reads an
      * uninitialized f32 local (real clang output does exactly that). */
     {
-        const wasm_func_desc_t *desc = &vm->funcs[func_idx];
+        /* The declared local types live in the function descriptor. An
+         * out-of-range index has no descriptor: the locals stay i32
+         * (the caller is responsible for a valid index). */
+        const wasm_func_desc_t *desc = NULL;
+        if (func_idx < (uint32_t)WASM_MAX_FUNCTIONS) {
+            desc = &vm->funcs[func_idx];
+        }
         for (i = param_count; i < total; i++) {
             uint32_t li = i - param_count;
             uint8_t vt = (uint8_t)WASM_TYPE_I32;
-            if (li < desc->local_type_count) {
+            if (desc != NULL && li < desc->local_type_count) {
                 vt = desc->local_types[li];
             }
             frame.locals[i].type = (wasm_valtype_t)vt;
