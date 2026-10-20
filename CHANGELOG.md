@@ -15,6 +15,15 @@ This release closes the hardening and readiness work on top of the 1.0.0
 core interpreter. It is additive and backward compatible: the engine's
 public behaviour is unchanged except where a bug is fixed below.
 
+### Verified
+
+- 2,036 unit assertions, 15,906 of 19,054 official spec assertions
+  passing (pinned corpus), the three real clang `--target=wasm32`
+  programs matching their native build byte for byte, and a clean
+  AddressSanitizer/UndefinedBehaviorSanitizer run.
+- Every commit is the work of the repository owner; there are no
+  co-authored or signed-off contributions from tools or agents.
+
 ### Added
 
 - Fuzzing infrastructure: `fuzz/` harnesses (the shared parse/validate/
