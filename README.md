@@ -392,7 +392,7 @@ static memory arena and host bindings.
 ## Testing
 
 Standalone `assert`-style suites, no test framework. Current status:
-**2022/2022 passing, 0 failed** (`make test` prints `TOTAL: 2022 passed, 0 failed`).
+**2024/2024 passing, 0 failed** (`make test` prints `TOTAL: 2024 passed, 0 failed`).
 
 | Suite | Coverage | Checks |
 |---|---|---|
