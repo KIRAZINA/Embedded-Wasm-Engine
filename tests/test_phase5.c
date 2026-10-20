@@ -384,14 +384,30 @@ static void test_control_traps(void)
         static const uint8_t c[] = { 0x02, 0x7E };
         CHECK(exec_bytes(c, sizeof(c), 0u, 0u) == WASM_TRAP_INVALID_ARGUMENT, "blocktype 0x7E (i64) rejected");
     }
-    { /* 33 nested blocks exceed depth 32. */
-        uint8_t c[66];
-        uint32_t i;
-        for (i = 0u; i < 33u; i++) {
+    { /* Nesting exactly at the compile-time limit is accepted:
+       * WASM_MAX_CTRL_NESTING nested blocks, each closed by an END. */
+        static uint8_t c[3u * (unsigned)WASM_MAX_CTRL_NESTING + 1u];
+        uint32_t i, n = (uint32_t)WASM_MAX_CTRL_NESTING;
+        for (i = 0u; i < n; i++) {
             c[2u * i] = 0x02;
             c[2u * i + 1u] = 0x40;
         }
-        CHECK(exec_bytes(c, sizeof(c), 0u, 0u) == WASM_TRAP_CONTROL_STACK_OVERFLOW, "33-deep nesting -> CONTROL_STACK_OVERFLOW");
+        for (i = 0u; i < n; i++) {
+            c[2u * n + i] = 0x0B;
+        }
+        c[2u * n + n] = 0x0B; /* function end */
+        CHECK(exec_bytes(c, sizeof(c), 0u, 0u) == WASM_TRAP_OK,
+              "nesting at the compile-time limit is accepted");
+    }
+    { /* One level past the compile-time limit overflows the pool. */
+        uint8_t c[2u * ((unsigned)WASM_MAX_CTRL_NESTING + 1u)];
+        uint32_t i, n = (uint32_t)WASM_MAX_CTRL_NESTING + 1u;
+        for (i = 0u; i < n; i++) {
+            c[2u * i] = 0x02;
+            c[2u * i + 1u] = 0x40;
+        }
+        CHECK(exec_bytes(c, sizeof(c), 0u, 0u) == WASM_TRAP_CONTROL_STACK_OVERFLOW,
+              "nesting past the limit -> CONTROL_STACK_OVERFLOW");
     }
     { /* br_if 0 falls through: const 7 survives, END pops normally. */
         static const uint8_t c[] = { 0x02, 0x40, 0x41, 0x00, 0x0D, 0x00, 0x41, 0x07, 0x0B };
@@ -399,26 +415,30 @@ static void test_control_traps(void)
         expect_i32(7, "fallthrough yields 7");
     }
     { /* raw control-stack unit checks. */
+        wasm_control_pool_t pool;
         wasm_control_stack_t cs;
         wasm_control_frame_t cf;
         wasm_control_frame_t *top = NULL;
         uint32_t i;
-        CHECK(wasm_control_stack_init(&cs) == WASM_TRAP_OK, "ctrl init");
+        CHECK(wasm_control_pool_init(&pool) == WASM_TRAP_OK, "ctrl pool init");
+        CHECK(wasm_control_stack_init(&cs, &pool) == WASM_TRAP_OK, "ctrl init");
         CHECK(wasm_control_stack_pop(&cs, NULL) == WASM_TRAP_CONTROL_STACK_UNDERFLOW, "raw pop empty -> UNDERFLOW");
         CHECK(wasm_control_stack_top(&cs, &top) == WASM_TRAP_CONTROL_STACK_UNDERFLOW, "raw top empty -> UNDERFLOW");
-        CHECK(wasm_control_stack_init(NULL) == WASM_TRAP_NULL, "raw init NULL -> NULL");
+        CHECK(wasm_control_stack_init(NULL, &pool) == WASM_TRAP_NULL, "raw init NULL -> NULL");
         cf.kind = WASM_BLOCK_TYPE_LOOP;
         cf.blocktype = (int32_t)WASM_BLOCKTYPE_VOID;
         cf.stack_height = 0u;
         cf.body_start = NULL;
-        for (i = 0u; i < (uint32_t)WASM_MAX_CONTROL_STACK_DEPTH; i++) {
+        for (i = 0u; i < (uint32_t)WASM_MAX_CTRL_NESTING; i++) {
             if (wasm_control_stack_push(&cs, &cf) != WASM_TRAP_OK) {
                 break;
             }
         }
-        CHECK(i == (uint32_t)WASM_MAX_CONTROL_STACK_DEPTH, "raw fills to 32");
-        CHECK(wasm_control_stack_push(&cs, &cf) == WASM_TRAP_CONTROL_STACK_OVERFLOW, "raw 33rd -> OVERFLOW");
+        CHECK(i == (uint32_t)WASM_MAX_CTRL_NESTING, "raw fills to the nesting limit");
+        CHECK(wasm_control_stack_push(&cs, &cf) == WASM_TRAP_CONTROL_STACK_OVERFLOW, "raw one past the limit -> OVERFLOW");
         CHECK(wasm_control_stack_top(&cs, &top) == WASM_TRAP_OK && top->kind == WASM_BLOCK_TYPE_LOOP, "raw top readable");
+        CHECK(wasm_control_stack_truncate(&cs, 1u) == WASM_TRAP_OK, "raw truncate one");
+        CHECK(wasm_control_stack_depth(&cs) == (uint32_t)WASM_MAX_CTRL_NESTING - 1u, "truncate shrinks the window");
     }
     { /* SLEB/ULEB assembler sanity (uses enc helpers, keeps -Werror quiet). */
         uint8_t buf[8];

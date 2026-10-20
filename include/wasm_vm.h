@@ -68,6 +68,8 @@ typedef struct {
 typedef struct wasm_vm {
     wasm_stack_t operands;
     wasm_call_stack_t calls;
+    wasm_control_pool_t ctrl_pool; /* shared structured-control frames */
+    uint64_t scan_bytes; /* bytes scanned by branch/block target scans */
     wasm_memory_t *mem; /* borrowed linear memory (NULL = unbound) */
     wasm_func_desc_t funcs[WASM_MAX_FUNCTIONS];
     wasm_global_t globals[WASM_MAX_GLOBALS];
@@ -96,6 +98,24 @@ wasm_trap_t wasm_vm_bind_memory(wasm_vm_t *vm, wasm_memory_t *mem);
 wasm_trap_t wasm_vm_attach_code(wasm_vm_t *vm, const uint8_t *code, size_t len);
 wasm_trap_t wasm_vm_step(wasm_vm_t *vm);
 wasm_trap_t wasm_vm_run(wasm_vm_t *vm);
+
+/*
+ * Phase 4 (hardening): charge the bytes scanned while resolving branch
+ * targets against the host's step budget.
+ *
+ * A single VM step can scan an entire function body (one huge block
+ * plus a branch to a distant END), so the cost of one step is not
+ * bounded by the module alone. The VM counts the scanned bytes; the
+ * host turns every WASM_SCAN_BYTES_PER_STEP bytes into one extra step
+ * of its own budget. Program semantics are unchanged: only the
+ * watchdog budget shrinks.
+ *
+ * Usage:
+ *     uint64_t cursor = 0;
+ *     ...
+ *     budget -= 1u + wasm_vm_scan_charge(&vm, &cursor);
+ */
+uint32_t wasm_vm_scan_charge(wasm_vm_t *vm, uint64_t *cursor);
 
 /* Phase 5: host function registration for OP_CALL. */
 wasm_trap_t wasm_vm_define_function(wasm_vm_t *vm, uint32_t func_idx,

@@ -151,8 +151,15 @@ typedef struct {
 #endif
 
 /* Phase 5: structured-control bounds + function table size. */
-#ifndef WASM_MAX_CONTROL_STACK_DEPTH
-#define WASM_MAX_CONTROL_STACK_DEPTH 32u /* nested control frames */
+/* Phase 4 (hardening): maximum number of live structured-control
+ * frames (blocks/loops/ifs) across the WHOLE call stack. The validator
+ * rejects deeper nesting up front (WASM_ERR_INVALID_BLOCK) and the
+ * interpreter traps (WASM_TRAP_CONTROL_STACK_OVERFLOW) instead of
+ * growing any structure. Override with -DWASM_MAX_CTRL_NESTING=<n>.
+ * The control pool lives in wasm_vm_t, so this bound costs
+ * WASM_MAX_CTRL_NESTING * sizeof(wasm_control_frame_t) bytes once. */
+#ifndef WASM_MAX_CTRL_NESTING
+#define WASM_MAX_CTRL_NESTING 1024u
 #endif
 #ifndef WASM_MAX_FUNCTIONS
 #define WASM_MAX_FUNCTIONS 32u /* imported plus defined functions */
@@ -165,6 +172,17 @@ typedef struct {
  * proportional to an attacker-controlled count. */
 #ifndef WASM_MAX_BR_TABLE_LABELS
 #define WASM_MAX_BR_TABLE_LABELS 256u
+#endif
+
+/* Phase 4 (hardening): every 1024 bytes scanned while resolving a
+ * branch target cost one step of the host's execution budget. A single
+ * VM step can otherwise scan an entire function body (one huge block
+ * plus a branch to a distant END), which makes the cost of one step
+ * unbounded. The charge only affects the host's watchdog budget, never
+ * the semantics of the executed program.
+ * Override with -DWASM_SCAN_BYTES_PER_STEP=<n>. */
+#ifndef WASM_SCAN_BYTES_PER_STEP
+#define WASM_SCAN_BYTES_PER_STEP 1024u
 #endif
 
 /* Phase 3 (globals/data): fixed global storage and data-segment staging.
@@ -191,7 +209,7 @@ typedef struct {
  * machine. Default 1024 (matches the execution operand cap, so anything
  * the validator accepts also fits the interpreter); override with
  * -DWASM_VALIDATE_STACK_MAX=<n>. Control depth reuses
- * WASM_MAX_CONTROL_STACK_DEPTH (validation and execution nest alike). */
+ * WASM_MAX_CTRL_NESTING (validation and execution nest alike). */
 #ifndef WASM_VALIDATE_STACK_MAX
 #define WASM_VALIDATE_STACK_MAX 1024u
 #endif

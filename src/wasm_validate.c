@@ -70,15 +70,15 @@ typedef struct {
 typedef struct {
     uint8_t kind;   /* 0 block, 1 loop, 2 if */
     uint8_t result; /* V_BLOCK_VOID or MVP valtype byte */
+    uint8_t unreachable;
+    uint8_t has_else;
     uint32_t height;
-    int unreachable;
-    int has_else;
 } vctrl_t;
 
 typedef struct {
     uint8_t vs[WASM_VALIDATE_STACK_MAX];
     uint32_t vtop;
-    vctrl_t cs[WASM_MAX_CONTROL_STACK_DEPTH];
+    vctrl_t cs[WASM_MAX_CTRL_NESTING];
     uint32_t cdepth;
     int func_unreachable;
     uint8_t locals[WASM_MAX_LOCALS_PER_FRAME];
@@ -333,7 +333,7 @@ static wasm_err_t vopen_block(validator_t *v, uint8_t kind, uint8_t result,
     /* Capture the enclosing unreachability BEFORE pushing: afterwards the
      * top frame is the new one itself. */
     int parent_dead = vunreach(v);
-    if (v->cdepth >= (uint32_t)WASM_MAX_CONTROL_STACK_DEPTH) {
+    if (v->cdepth >= (uint32_t)WASM_MAX_CTRL_NESTING) {
         return WASM_ERR_INVALID_BLOCK;
     }
     f = &v->cs[v->cdepth++];

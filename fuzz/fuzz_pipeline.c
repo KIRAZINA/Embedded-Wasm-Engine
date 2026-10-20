@@ -60,11 +60,15 @@ static int fuzz_walk_sections(const wasm_module_t *mod)
 /* ---- stage 5: bounded execution ---- */
 
 /* Run one defined, zero-parameter function for at most `budget` steps.
- * Any trap simply ends the run: traps are expected, crashes are not. */
+ * Any trap simply ends the run: traps are expected, crashes are not.
+ * Bytes scanned while resolving branch targets are charged to the same
+ * budget (Phase 4 hardening), so a pathological module cannot make one
+ * step arbitrarily expensive. */
 static void fuzz_run_function(uint32_t idx, uint32_t budget)
 {
     const wasm_func_desc_t *d;
     wasm_frame_t *top = NULL;
+    uint64_t scan_cursor = 0u;
 
     if (idx >= (uint32_t)WASM_MAX_FUNCTIONS) {
         return;
@@ -84,6 +88,7 @@ static void fuzz_run_function(uint32_t idx, uint32_t budget)
         return;
     }
     while (budget-- > 0u) {
+        uint32_t charge;
         if (wasm_call_stack_top(&g_vm.calls, &top) != WASM_TRAP_OK) {
             return;
         }
@@ -99,6 +104,11 @@ static void fuzz_run_function(uint32_t idx, uint32_t budget)
         if (wasm_vm_step(&g_vm) != WASM_TRAP_OK) {
             return; /* trap: expected outcome, not a finding */
         }
+        charge = wasm_vm_scan_charge(&g_vm, &scan_cursor);
+        if (charge > budget) {
+            return; /* budget consumed by the scan */
+        }
+        budget -= charge;
     }
 }
 
