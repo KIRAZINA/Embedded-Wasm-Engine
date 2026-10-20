@@ -43,25 +43,46 @@ Every entry is explicitly classified and justified. Silently ignored = violation
 
 ## Numeric baseline (CI regression gate)
 
-The numbers below are the reference result of the full official spec
-suite (65 suites) on the reference toolchain (gcc 13.3 / clang 18.1,
-Ubuntu 24.04 corpus). `tools/check_spec_baseline.py` runs the suite and
-fails when the number of passing assertions drops or when a failure
-class grows — a regression gate, not a claim of full conformance.
+The numbers below are the reference result of the official spec suite on
+the **pinned** corpus: `tools/fetch_spec_tests.sh` checks out upstream
+revision `340650f` (the corpus is otherwise a moving target, and the
+suite set also depends on the `wast2json` version). 66 suites, 19,054
+assertions.
+
+`tools/check_spec_baseline.py` compares a run against these numbers and
+fails when the number of passing assertions drops or a failure class
+grows. The `corpus_*` lines are a fingerprint: when it does not match
+(the converter changed), the pass *rate* is compared with a tolerance
+instead, so a corpus change cannot cause a false failure.
 
 ```text
-total_pass = 16432
-total_fail = 3804
-CLASS VALIDATOR_BUG:rejects-valid = 130
-CLASS VALIDATOR_BUG:accepts-assert_invalid = 97
-CLASS ENGINE_BUG:mismatch = 575
-CLASS KNOWN_DEVIATION:dead-instance = 2729
+corpus_suites = 66
+corpus_assertions = 19054
+total_pass = 15906
+total_fail = 3148
+CLASS ENGINE_BUG:mismatch = 128
+CLASS ENGINE_BUG:no-trap = 15
+CLASS KNOWN_DEVIATION:dead-instance = 2187
+CLASS KNOWN_DEVIATION:externref-table = 6
+CLASS KNOWN_DEVIATION:multi-table = 1
+CLASS KNOWN_DEVIATION:multi-value = 2
+CLASS KNOWN_DEVIATION:opcodes(26,d1,d2) = 1
+CLASS KNOWN_DEVIATION:opcodes(c0,c1) = 1
+CLASS KNOWN_DEVIATION:opcodes(c2,c3,c4) = 1
+CLASS KNOWN_DEVIATION:opcodes(d0) = 2
+CLASS KNOWN_DEVIATION:opcodes(d0,d2) = 1
+CLASS KNOWN_DEVIATION:opcodes(d2) = 1
+CLASS KNOWN_DEVIATION:opcodes(fc) = 4
+CLASS KNOWN_DEVIATION:spectest-host = 482
+CLASS KNOWN_DEVIATION:utf8-names-unchecked = 176
+CLASS VALIDATOR_BUG:accepts-assert_invalid = 36
+CLASS VALIDATOR_BUG:accepts-assert_malformed = 19
+CLASS VALIDATOR_BUG:rejects-valid = 85
 ```
 
 The remaining failures are the documented gaps above: multi-module
-linking, externref and multi-table support, post-MVP opcodes and
-UTF-8 name checking. Phase 4 fixed the element-section encoding, which
-moved 15 `rejects-valid` cases to *passing* and unblocked 17 further
-`ENGINE_BUG:mismatch` cases (modules that now load and expose a
-different pre-existing weakness). Phase 5 fixed the typed-local
-default, which turned 11 of those mismatches into passing assertions.
+linking (2,187 `dead-instance` assertions — the dominant class),
+missing host functions (`spectest-host`), UTF-8 name validation,
+post-MVP opcodes and tables. Two classes are **not** covered by a
+documented deviation and still need triage: `ENGINE_BUG:mismatch` (128
+assertions, mostly in `float_exprs`) and `ENGINE_BUG:no-trap` (15).

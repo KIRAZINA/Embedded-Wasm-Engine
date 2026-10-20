@@ -3,36 +3,84 @@
 All notable changes to this project are documented here. The project follows
 Keep a Changelog and uses Semantic Versioning.
 
-## [Unreleased] - 2026-10-20
+## [1.1.0] - 2026-10-20
+
+This release closes the hardening and readiness phases (4, 5 and 6) on
+top of the 1.0.0 core interpreter. It is additive and backward
+compatible: the engine's public behaviour is unchanged except where a
+bug is fixed below.
 
 ### Added
 
-- Fuzzing infrastructure: `fuzz/` harnesses (parse pipeline, file/stdin entry
-  point, seeded mutation driver, libFuzzer and AFL++ entry points), a Python
-  corpus/mutation driver with crash minimization, backend auto-detection
-  (libFuzzer -> AFL++ -> deterministic loop) and the `make fuzz*` targets.
+- Fuzzing infrastructure: `fuzz/` harnesses (the shared parse/validate/
+  link/execute pipeline, a file-or-stdin entry point, a seeded mutation
+  driver, libFuzzer and AFL++ entry points), a Python corpus driver with
+  crash minimization, backend auto-detection (libFuzzer → AFL++ →
+  deterministic loop) and the `make fuzz*` targets.
 - Sanitizer build targets `make asan`, `make ubsan` and `make sanitizers`
   (own build tree, full unit suite plus a three-suite spec smoke run).
 - `make no-alloc-check`: mechanical verification of the zero-allocation
   invariant across engine, tests, tools and fuzz drivers.
-- `tests/test_phase13.c`: control-nesting limit and branch-scan budget tests.
+- A shared test harness (`tests/harness.h`): test registration,
+  pass/fail counters, assert macros with file:line, a non-zero exit
+  status. All 15 suites were migrated to it.
+- `realworld/`: three programs built natively **and** with
+  `clang --target=wasm32` (integer sort, 8×8 f32 matrix multiply, CRC-32
+  with a lookup table in the data section). The engine's output must
+  match the native build byte for byte; the emitted modules are checked
+  to be MVP-only. New targets: `make realworld`, `make realworld-verify`.
+- `tests/test_phase13.c` (control-nesting limit, shared control pool,
+  branch-scan budget) and `tests/test_phase14.c` (real-world modules and
+  the typed-local regression).
+- CI: a {gcc, clang} × {-O0, -O2} build matrix, a spec job with a
+  numeric regression gate and an uploaded summary, a size gate against
+  the committed `size_baseline.txt`, a real-world job, an
+  embedded-configuration job, plus the sanitizer, no-alloc, fuzz and
+  Cortex-M4 cross jobs.
+- `docs/SPEC_STATUS.md`: the measured spec-compliance summary, and
+  `tools/size_measure.sh`, `tools/check_size_baseline.py`,
+  `tools/check_spec_baseline.py`, `tools/gen_realworld_data.py` and
+  `tools/setup_wasm_toolchain.sh` as the supporting tooling.
+- `tools/fetch_spec_tests.sh` now pins the upstream spec revision, so
+  the corpus (and every number derived from it) is reproducible.
 
 ### Changed
 
 - Structured-control nesting is bounded by the compile-time constant
   `WASM_MAX_CTRL_NESTING` (default 1024). All call frames share one
   fixed-capacity control pool inside `wasm_vm_t`, so the accepted nesting
-  depth grew from 32 to 1024 while the VM structure got smaller.
+  depth grew from 32 to 1024 while the VM structure got smaller
+  (105,008 → 80,960 bytes).
 - Branch-target scans are charged to the host step budget
   (`WASM_SCAN_BYTES_PER_STEP`, default 1024), which bounds the cost of a
   single VM step on pathological modules. Program semantics are unchanged.
-- `make clean` works on native Windows, and `BUILD` is overridable.
+- The desktop CLI accepts module files up to 1 MiB (`RUNNER_FILE_MAX`);
+  the embedded targets keep an explicit 4 KiB budget.
+- `make clean` works on native Windows, `BUILD` is overridable, and the
+  shell/Python tooling is pinned to LF line endings.
 
 ### Fixed
 
 - Element sections are parsed with the standard binary encoding (form
   bytes `0x00/0x02/0x04/0x06`) instead of a pre-standard draft layout, so
-  standard modules with element segments are accepted again.
+  standard modules with element sections are accepted again.
+- An element segment in a module without a table is rejected
+  ("unknown table") instead of being accepted.
+- An uninitialized local keeps its **declared** type: an f32 local now
+  starts at +0.0f instead of an i32 zero. Real compiler output reads an
+  f32 local before writing it and used to trap.
+- The fuzz pipeline creates a visible memory page, so modules with a
+  data section are executed instead of being rejected.
+- `sh tools/fetch_spec_tests.sh` works with any POSIX shell and converts
+  the corpus (it aborted on `set -o pipefail` and converted zero files).
+- The zero-allocation check no longer matches prose such as
+  "dependency-free (".
+
+### Known limitations
+
+See `docs/SPEC_STATUS.md` and `tests/spec/DEVIATIONS.md`: multi-module
+linking, externref/multi-table support, post-MVP proposals, UTF-8 name
+validation, and one `f64 sqrt` rounding edge case in the host `libm`.
 
 ## [1.0.0] - 2026-10-11
 

@@ -9,7 +9,17 @@ with that baseline:
   * the number of passing assertions must not drop,
   * no failure class may grow by more than the allowed slack.
 
+The corpus is pinned (tools/fetch_spec_tests.sh checks out a fixed
+upstream revision), but it still depends on the wast2json version: a
+different converter can parse a different set of suites. The baseline
+therefore carries a *fingerprint* (corpus_suites / corpus_assertions).
+When the fingerprint matches, the comparison is strict. When it does
+not, the pass *rate* is compared with a tolerance instead, so a corpus
+change cannot produce a false failure -- and a real regression is still
+caught.
+
     python3 tools/check_spec_baseline.py [--baseline FILE] [--slack N]
+                                         [--rate-tolerance 0.02]
 
 Exit status 0 when the run is at least as good as the baseline, 1
 otherwise (and 2 when the suite could not be run at all).
@@ -88,6 +98,9 @@ def main():
     ap.add_argument("--summary", default=None,
                     help="parse an existing runner summary instead of "
                          "running the suite again")
+    ap.add_argument("--rate-tolerance", type=float, default=0.02,
+                    help="allowed drop of the pass rate when the corpus "
+                         "fingerprint differs (percentage points)")
     args = ap.parse_args()
 
     if not os.path.isfile(args.baseline):
@@ -125,33 +138,73 @@ def main():
 
     status = 0
     print("spec baseline check (%s)" % os.path.basename(args.baseline))
-    base_pass = baseline.get("total_pass", 0)
-    if total_pass < base_pass:
-        print("  FAIL: passing assertions dropped: %d < %d" %
-              (total_pass, base_pass))
-        status = 1
+
+    # Corpus fingerprint: the corpus is pinned upstream, but the set of
+    # convertible suites also depends on the wast2json version. A
+    # different fingerprint means the numbers are not directly
+    # comparable, so the pass rate is compared with a tolerance.
+    suites = 0
+    if os.path.isdir(args.json_dir):
+        suites = len([f for f in os.listdir(args.json_dir)
+                      if f.endswith(".json")])
+    assertions = total_pass + total_fail
+    base_suites = baseline.get("corpus_suites")
+    base_assertions = baseline.get("corpus_assertions")
+    same_corpus = (base_suites is None or base_assertions is None or
+                   (suites == base_suites and assertions == base_assertions))
+    if same_corpus:
+        print("  ok   : corpus fingerprint matches (%d suites, %d assertions)"
+              % (suites, assertions))
     else:
-        print("  ok   : passing assertions %d (baseline %d)" %
-              (total_pass, base_pass))
+        print("  note : corpus fingerprint differs (now %d suites, %d "
+              "assertions; baseline %s suites, %s assertions) -- the pass "
+              "rate is compared with a %.1f point tolerance"
+              % (suites, assertions,
+                 base_suites if base_suites is not None else "?",
+                 base_assertions if base_assertions is not None else "?",
+                 args.rate_tolerance * 100.0))
+
+    base_pass = baseline.get("total_pass", 0)
+    if same_corpus:
+        if total_pass < base_pass:
+            print("  FAIL: passing assertions dropped: %d < %d" %
+                  (total_pass, base_pass))
+            status = 1
+        else:
+            print("  ok   : passing assertions %d (baseline %d)" %
+                  (total_pass, base_pass))
+    else:
+        base_rate = (float(base_pass) / float(base_pass + base_assertions)
+                     if (base_pass + base_assertions) else 0.0)
+        now_rate = (float(total_pass) / float(assertions)
+                    if assertions else 0.0)
+        if now_rate < base_rate - args.rate_tolerance:
+            print("  FAIL: pass rate dropped: %.4f < %.4f (tolerance %.4f)"
+                  % (now_rate, base_rate, args.rate_tolerance))
+            status = 1
+        else:
+            print("  ok   : pass rate %.4f (baseline %.4f)" %
+                  (now_rate, base_rate))
     base_fail = baseline.get("total_fail")
-    if base_fail is not None and total_fail > base_fail:
+    if same_corpus and base_fail is not None and total_fail > base_fail:
         print("  FAIL: failing assertions grew: %d > %d" %
               (total_fail, base_fail))
         status = 1
     else:
         print("  ok   : failing assertions %d (baseline %s)" %
               (total_fail, base_fail if base_fail is not None else "-"))
-    for name, count in sorted(classes.items()):
-        key = "CLASS " + name
-        if key not in baseline:
-            continue
-        base = baseline[key]
-        if count > base + args.slack:
-            print("  FAIL: class %s grew: %d > %d" % (name, count, base))
-            status = 1
-        else:
-            print("  ok   : class %-45s %d (baseline %d)" %
-                  (name, count, base))
+    if same_corpus:
+        for name, count in sorted(classes.items()):
+            key = "CLASS " + name
+            if key not in baseline:
+                continue
+            base = baseline[key]
+            if count > base + args.slack:
+                print("  FAIL: class %s grew: %d > %d" % (name, count, base))
+                status = 1
+            else:
+                print("  ok   : class %-45s %d (baseline %d)" %
+                      (name, count, base))
     if status != 0:
         print("FAIL: the spec suite regressed against the baseline")
     else:

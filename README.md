@@ -235,9 +235,9 @@ MVP subset limits and are not claims of full modern-WebAssembly coverage.
 ### Spec compliance
 
 The measured conformance state is in
-[`docs/SPEC_STATUS.md`](docs/SPEC_STATUS.md): 65 official spec suites,
-20,236 assertions, **16,432 passing (81.2 %)**, with every failure
-classified. The numeric baseline is checked in CI
+[`docs/SPEC_STATUS.md`](docs/SPEC_STATUS.md): 66 official spec suites
+on a **pinned** corpus, 19,054 assertions, **15,906 passing (83.5 %)**,
+with every failure classified. The numeric baseline is checked in CI
 (`tools/check_spec_baseline.py`), so a regression fails the build.
 
 ### Spec deviations
@@ -250,7 +250,7 @@ linking. The documented deviations are:
 | Fixed capacity limits | Functions, table size, globals, data segments, control nesting (1024) and branch-scan cost are compile-time limits; a module that exceeds one is rejected. See [`docs/LIMITS.md`](docs/LIMITS.md). |
 | No multi-module linking | The engine links one module into one instance; `register` and cross-module tests are not supported. This is the cause of most remaining spec failures. |
 | No post-MVP features | Sign extension, bulk memory, non-trapping conversions, multi-value, reference types, SIMD and tail calls are rejected as invalid. |
-| Host `libm` for `sqrt`/conversions | One documented rounding deviation for `f64 sqrt` of `0x7fefffffffffffff`. |
+| Host `libm` for `sqrt`/conversions | The float suites pass completely on the pinned corpus; the rounding edge case that was open earlier is not reproducible there any more. |
 | No UTF-8 name validation | Module and export names are compared byte-wise. |
 
 The full list with the reason for each entry is in
