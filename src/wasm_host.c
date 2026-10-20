@@ -1568,8 +1568,13 @@ wasm_err_t wasm_instantiate(wasm_vm_t *vm, const wasm_module_t *mod,
     }
 
     /* 7b. Element segments into the table (same no-partial policy).
-     * Needs function linking done (funcidx validated against the total). */
+     * Needs function linking done (funcidx validated against the total).
+     * An element segment requires a table: without one the module is
+     * invalid ("unknown table"), not silently ignored. */
     if (has_elem) {
+        if (!has_table) {
+            return WASM_ERR_INVALID_SECTION;
+        }
         rc = apply_elements(vm, &elemp, nimportglobals, nimports + ndefined);
         if (rc != WASM_OK) {
             return rc;

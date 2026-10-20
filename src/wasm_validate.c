@@ -2009,6 +2009,10 @@ wasm_err_t wasm_validate_module(const wasm_module_t *mod)
         uint32_t nfuncs = mc.nimports + mc.ndefined;
         cur = elemp.data;
         end = elemp.data + elemp.len;
+        /* An element segment needs a table to exist ("unknown table"). */
+        if (!has_table) {
+            return WASM_ERR_INVALID_SECTION;
+        }
         rc = leb128_decode_u32(&cur, end, &count);
         if (rc != WASM_OK) {
             return rc;

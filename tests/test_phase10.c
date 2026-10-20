@@ -500,9 +500,11 @@ static void test_element_malformed(void)
     CHECK(do_instantiate(kTableIdx, sizeof(kTableIdx)) ==
           WASM_ERR_INVALID_SECTION, "tableidx 1 rejected");
     CHECK(do_instantiate(kNoTable, sizeof(kNoTable)) ==
-          WASM_ERR_ELEMENT_OUT_OF_BOUNDS, "entries need a table");
-    CHECK(do_instantiate(kNoTableEmpty, sizeof(kNoTableEmpty)) == WASM_OK,
-          "empty segment needs no table");
+          WASM_ERR_INVALID_SECTION, "entries need a table");
+    /* Spec: an element segment always needs a table ("unknown table"),
+     * even when the segment is empty. */
+    CHECK(do_instantiate(kNoTableEmpty, sizeof(kNoTableEmpty)) ==
+          WASM_ERR_INVALID_SECTION, "empty segment needs a table too");
 }
 
 static void test_element_trailing(void)
