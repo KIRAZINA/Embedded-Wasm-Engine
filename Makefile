@@ -38,14 +38,12 @@ SPEC_CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude \
 T1        = $(BUILD)/test_phase1
 
 # The CLI-spawning tests must exercise the runner of the build tree they
-# belong to (a sanitized tree has its own runner), so the path is passed
-# as a compile-time define.
-ifeq ($(OS),Windows_NT)
-  TEST_RUNNER_PATH = $(BUILD)\\wasm_runner.exe
-else
-  TEST_RUNNER_PATH = $(BUILD)/wasm_runner
-endif
-TEST_DEFS = -DWASM_TEST_RUNNER='"$(TEST_RUNNER_PATH)"'
+# belong to (a sanitized tree has its own runner), so the build directory
+# is passed as a compile-time define. The tests pick the separator and
+# the file name themselves: they are native programs, and on Windows
+# their system() call goes through the command interpreter, which needs
+# backslashes in a command path.
+TEST_DEFS = -DWASM_TEST_BUILD_DIR='"$(BUILD)"'
 T2        = $(BUILD)/test_phase2
 T3        = $(BUILD)/test_phase3
 T4        = $(BUILD)/test_phase4

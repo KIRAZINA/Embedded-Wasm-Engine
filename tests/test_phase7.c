@@ -27,11 +27,20 @@
 #include "wasm_vm.h"
 #include "harness.h"
 
-/* The runner under test. The Makefile passes the path of the binary that
- * belongs to this build tree, so a sanitized tree exercises the sanitized
- * runner instead of the plain one. */
-#ifndef WASM_TEST_RUNNER
-#define WASM_TEST_RUNNER "./build/wasm_runner"
+
+/* The runner under test. The Makefile passes the build directory, so a
+ * sanitized tree exercises the sanitized runner instead of the plain
+ * one. The separator and the file name are platform specific: the tests
+ * are native programs, and on Windows their system() call goes through
+ * the command interpreter, which needs backslashes. */
+#ifndef WASM_TEST_BUILD_DIR
+#define WASM_TEST_BUILD_DIR "build"
+#endif
+
+#if defined(_WIN32)
+#define RUNNER_PATH WASM_TEST_BUILD_DIR "\\wasm_runner.exe"
+#else
+#define RUNNER_PATH WASM_TEST_BUILD_DIR "/wasm_runner"
 #endif
 
 
@@ -1065,14 +1074,14 @@ static void test_cli_float(void)
 {
 #ifdef _WIN32
     static const char *const cmd_run =
-        WASM_TEST_RUNNER " demo\\fadd.wasm main > build\\cli_fadd.txt";
+        RUNNER_PATH " demo\\fadd.wasm main > build\\cli_fadd.txt";
     static const char *const cmd_dump =
-        WASM_TEST_RUNNER " --dump demo\\fadd.wasm > build\\dump_fadd.txt";
+        RUNNER_PATH " --dump demo\\fadd.wasm > build\\dump_fadd.txt";
 #else
     static const char *const cmd_run =
-        WASM_TEST_RUNNER " demo/fadd.wasm main > build/cli_fadd.txt";
+        RUNNER_PATH " demo/fadd.wasm main > build/cli_fadd.txt";
     static const char *const cmd_dump =
-        WASM_TEST_RUNNER " --dump demo/fadd.wasm > build/dump_fadd.txt";
+        RUNNER_PATH " --dump demo/fadd.wasm > build/dump_fadd.txt";
 #endif
     static char out[4096];
     FILE *fp = NULL;
