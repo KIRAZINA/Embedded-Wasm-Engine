@@ -26,7 +26,7 @@
  *       static const harness_test_t tests[] = {
  *           { "something", test_something },
  *       };
- *       return harness_run("phase15", tests,
+ *       return harness_run("my_suite", tests,
  *                          sizeof(tests) / sizeof(tests[0]));
  *   }
  *

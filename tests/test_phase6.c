@@ -1,5 +1,5 @@
 /*
- * test_phase6.c — Phase 6 integration: host callbacks, export lookup,
+ * test_phase6.c — host callbacks, export lookup,
  * import binding, whole-module instantiation, arg/return round-trips.
  * Standalone, C11, stdio.h/stdint.h only. Hand-assembled MVP modules.
  *

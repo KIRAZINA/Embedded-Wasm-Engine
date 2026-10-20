@@ -1,5 +1,5 @@
 /*
- * test_phase5.c — Phase 5 verification: structured control flow + CALL interop.
+ * test_phase5.c — structured control flow and the CALL/RETURN interop.
  * Standalone, C11, stdio.h/stdint.h only. Hand-assembled bytecode vectors.
  *
  * Build: gcc -std=c11 -Wall -Wextra -Werror -Iinclude src/leb128.c

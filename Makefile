@@ -1,5 +1,5 @@
 # Baseline Makefile — C11 strict, zero-dependency (libm only for floats).
-# `make all`  : builds wasm_runner + all test binaries (phase1..10, cli).
+# `make all`  : builds wasm_runner + all test binaries.
 # `make test` : builds everything, runs all suites sequentially, prints
 #               per-suite results and a final TOTAL line
 #               ("TOTAL: X passed, Y failed"); non-zero exit on failure.
@@ -215,7 +215,16 @@ $(SPEC_RUNNER_BIN): $(SRC) src/main.c include/version.h
 	$(MKDIR_P)
 	$(CC) $(SPEC_CFLAGS) $(SRC) src/main.c -o $(SPEC_RUNNER_BIN) $(LDLIBS)
 
+# The official spec suite. The suite itself has documented failures
+# (tests/spec/DEVIATIONS.md), so the target reports the full summary and
+# then applies the *regression gate*: it exits non-zero only when the
+# result is worse than the recorded baseline. 'make spec-report' keeps
+# the raw runner behaviour (exit 1 on any unclassified failure).
 spec: $(SPEC_RUNNER_BIN)
+	-$(PYTHON) tools/run_spec_suite.py --runner $(SPEC_RUNNER_BIN) tests/spec/json/*.json | tee $(BUILD)/spec_summary.txt
+	$(PYTHON) tools/check_spec_baseline.py --summary $(BUILD)/spec_summary.txt
+
+spec-report: $(SPEC_RUNNER_BIN)
 	$(PYTHON) tools/run_spec_suite.py --runner $(SPEC_RUNNER_BIN) tests/spec/json/*.json
 
 # Run the spec suite, keep the summary and check it against the numeric
@@ -409,4 +418,4 @@ clean:
 	rm -rf $(BUILD)
 endif
 
-.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 test13 test14 testcli runner fuzz parity spec spec-summary size-check size-report arm-cross embedded-check asan ubsan sanitizers san-run sanitize clean
+.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 test13 test14 testcli runner fuzz parity spec spec-report spec-summary size-check size-report arm-cross embedded-check asan ubsan sanitizers san-run sanitize clean

@@ -1,5 +1,5 @@
 /*
- * test_phase2.c — Phase 2 verification: operand stack + linear memory + traps.
+ * test_phase2.c — operand stack, linear memory and the trap paths.
  * Standalone, C11, assert.h/stdio.h only (+ string.h for bit-exact float compare).
  *
  * Build: gcc -std=c11 -Wall -Wextra -Werror -Iinclude src/leb128.c

@@ -1,20 +1,43 @@
 #!/usr/bin/env bash
 # fetch_spec_tests.sh — reproduce official WebAssembly spec corpus
 # Invariant: zero C allocation; this is Python/shell tooling only.
-set -euo pipefail
+#
+# POSIX sh compatible on purpose: CI and the release verification invoke
+# it as `sh tools/fetch_spec_tests.sh`, and `set -o pipefail` is not
+# available there.
+set -eu
 
 UPSTREAM="tests/spec/upstream"
 OUTDIR="tests/spec/json"
 
+# Pinned upstream revision. The corpus must be reproducible: the numeric
+# baseline in tests/spec/DEVIATIONS.md was measured with exactly this
+# revision, and the upstream repository moves (a fresh fetch of `main`
+# changes the suite set and therefore the numbers). Update the pin and
+# the baseline together.
+UPSTREAM_REV="340650f2f620169685814774bc5b019d05d4d3d7"
+
 # 1. Obtain upstream spec repo (shallow, only test/core/*.wast needed)
 if [ ! -d "$UPSTREAM/test/core" ]; then
-    echo "Cloning spec repo (shallow) ..."
+    echo "Cloning spec repo (shallow, pinned revision) ..."
     rm -rf "$UPSTREAM"
-    git clone --depth 1 https://github.com/WebAssembly/spec "$UPSTREAM"
+    git clone --quiet --depth 1 https://github.com/WebAssembly/spec "$UPSTREAM"
 else
-    echo "Upstream repo present at $UPSTREAM (pulling latest shallow) ..."
-    (cd "$UPSTREAM" && git fetch --depth 1 origin main 2>/dev/null || git fetch --depth 1) || true
+    echo "Upstream repo present at $UPSTREAM (checking out the pinned revision) ..."
 fi
+
+# Check out the pinned revision (a shallow clone may not contain it yet).
+if ! (cd "$UPSTREAM" && git checkout --quiet "$UPSTREAM_REV" 2>/dev/null); then
+    (cd "$UPSTREAM" && git fetch --quiet --depth 1 origin "$UPSTREAM_REV") || {
+        echo "ERROR: cannot fetch the pinned upstream revision $UPSTREAM_REV" >&2
+        exit 1
+    }
+    (cd "$UPSTREAM" && git checkout --quiet "$UPSTREAM_REV") || {
+        echo "ERROR: cannot check out $UPSTREAM_REV" >&2
+        exit 1
+    }
+fi
+echo "upstream revision: $(cd "$UPSTREAM" && git rev-parse --short HEAD)"
 
 # 2. Locate wast2json (system package or python wabt package)
 WAST2JSON="wast2json"
@@ -47,13 +70,21 @@ for wast in "$UPSTREAM/test/core"/*.wast; do
     basename="$(basename "$wast" .wast)"
     out_json="$OUTDIR/$basename.json"
     # wast2json writes $basename.json + $basename.N.wasm beside it.
-    # To keep outputs contained in OUTDIR we run from OUTDIR with the input path.
-    (cd "$OUTDIR" && "$WAST2JSON" --enable-all "$wast" -o "$basename.json") || {
+    # To keep outputs contained in OUTDIR we run from OUTDIR, so the
+    # input path must be absolute (a relative one would break after
+    # the change of directory).
+    wast_abs="$(cd "$(dirname "$wast")" && pwd)/$(basename "$wast")"
+    (cd "$OUTDIR" && "$WAST2JSON" --enable-all "$wast_abs" -o "$basename.json") || {
         echo "WARNING: conversion failed for $basename" >&2
         continue
     }
     count=$((count+1))
 done
+
+if [ "$count" -eq 0 ]; then
+    echo "ERROR: no .wast file was converted (wast2json: $WAST2JSON)" >&2
+    exit 1
+fi
 
 echo "Converted $count .wast files into $OUTDIR/"
 echo "Binaries (.wasm) are gitignored; script committed so CI can reproduce."

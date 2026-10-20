@@ -1,5 +1,5 @@
 /*
- * test_phase10.c — Phase 4 verification: tables, elements, call_indirect.
+ * test_phase10.c — tables, element segments and call_indirect.
  * Standalone, C11, assert-style. Modules hand-assembled with exact sizes.
  *
  * Covers: indirect dispatch (idx 0/last), table OOB (size/99/-1),
