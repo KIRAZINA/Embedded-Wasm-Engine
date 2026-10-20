@@ -11,7 +11,7 @@ LDLIBS   ?= -lm
 SRC       = src/leb128.c src/wasm_parser.c src/wasm_stack.c src/wasm_memory.c \
             src/wasm_frame.c src/wasm_control.c src/wasm_vm.c src/wasm_host.c \
             src/wasm_validate.c
-BUILD     = build
+BUILD    ?= build
 ifeq ($(OS),Windows_NT)
 MKDIR_P   = if not exist $(BUILD) mkdir $(BUILD)
 ARM_MKDIR = if not exist "$(ARM_BUILD)" mkdir "$(ARM_BUILD)"
@@ -21,9 +21,11 @@ ARM_MKDIR = mkdir -p $(ARM_BUILD)
 endif
 RUNNER    = $(BUILD)/wasm_runner
 ifeq ($(OS),Windows_NT)
+EXE       = .exe
 PARITY_RUNNER = $(RUNNER).exe
 SPEC_RUNNER_BIN = $(BUILD)/wasm_runner_spec.exe
 else
+EXE       =
 PARITY_RUNNER = $(RUNNER)
 SPEC_RUNNER_BIN = $(BUILD)/wasm_runner_spec
 endif
@@ -120,7 +122,7 @@ $(FUZZ): $(SRC) tests/fuzz_smoke.c
 
 test: all
 ifeq ($(OS),Windows_NT)
-	powershell -NoProfile -Command "$$pass=0; $$fail=0; $$tests=@('build/test_phase1','build/test_phase2','build/test_phase3','build/test_phase4','build/test_phase5','build/test_phase6','build/test_phase7','build/test_phase8','build/test_phase9','build/test_phase10','build/test_phase11','build/test_phase12','build/test_cli'); foreach ($$t in $$tests) { $$o=& $$t; $$o | Select-Object -Last 3; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }; $$m=$$o | Select-String 'RESULT: ([0-9]+) passed, ([0-9]+) failed'; if ($$m) { $$pass += [int]$$m.Matches[0].Groups[1].Value; $$fail += [int]$$m.Matches[0].Groups[2].Value } }; Write-Output ('TOTAL: {0} passed, {1} failed' -f $$pass,$$fail); if ($$fail -ne 0) { exit 1 }"
+	powershell -NoProfile -Command "$$pass=0; $$fail=0; $$tests=@('$(BUILD)/test_phase1.exe','$(BUILD)/test_phase2.exe','$(BUILD)/test_phase3.exe','$(BUILD)/test_phase4.exe','$(BUILD)/test_phase5.exe','$(BUILD)/test_phase6.exe','$(BUILD)/test_phase7.exe','$(BUILD)/test_phase8.exe','$(BUILD)/test_phase9.exe','$(BUILD)/test_phase10.exe','$(BUILD)/test_phase11.exe','$(BUILD)/test_phase12.exe','$(BUILD)/test_cli.exe'); foreach ($$t in $$tests) { $$o=& $$t; $$o | Select-Object -Last 3; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }; $$m=$$o | Select-String 'RESULT: ([0-9]+) passed, ([0-9]+) failed'; if ($$m) { $$pass += [int]$$m.Matches[0].Groups[1].Value; $$fail += [int]$$m.Matches[0].Groups[2].Value } }; Write-Output ('TOTAL: {0} passed, {1} failed' -f $$pass,$$fail); if ($$fail -ne 0) { exit 1 }"
 else
 	@pass=0; fail=0; \
 	for t in $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(T8) $(T9) $(T10) $(T11) $(T12) $(TCLI); do \
@@ -206,15 +208,60 @@ arm-cross: targets/stm32/demo_add_wasm.c $(ARM_OBJECTS)
 		$(ARM_BUILD)/libwasm_engine.a -specs=nosys.specs -Wl,--gc-sections,-Map=$(ARM_BUILD)/embedded_demo.map \
 		-o $(ARM_BUILD)/embedded_demo.elf -lm
 
-sanitize:
-	$(MAKE) CFLAGS="$(CFLAGS) -fsanitize=address,undefined -fno-sanitize-recover=all" all $(FUZZ)
-	$(MAKE) CFLAGS="$(CFLAGS) -fsanitize=address,undefined -fno-sanitize-recover=all" test
-	$(MAKE) CFLAGS="$(CFLAGS) -fsanitize=address,undefined -fno-sanitize-recover=all" fuzz SEED=1 ITER=1000000
+# ---- Phase 4: sanitizer builds -------------------------------------------
+# Sanitizer toolchain: prefer clang when it is installed (it also provides
+# libFuzzer for the fuzz targets), otherwise fall back to gcc. Override
+# explicitly with `make asan CC=clang` / `make asan CC=gcc`.
+ifeq ($(OS),Windows_NT)
+SAN_CC ?= $(CC)
+else
+SAN_CC ?= $(shell command -v clang 2>/dev/null || echo gcc)
+endif
+SAN_CFLAGS   = -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude
+ASAN_FLAGS   = -fsanitize=address -fno-sanitize-recover=all
+UBSAN_FLAGS  = -fsanitize=undefined -fno-sanitize-recover=all
+SAN_FLAGS    = -fsanitize=address,undefined -fno-sanitize-recover=all
+# Three representative spec suites for the sanitizer smoke run:
+# float arithmetic, memory bounds, trap semantics.
+SPEC_SMOKE   = tests/spec/json/f32.json tests/spec/json/memory_trap.json \
+               tests/spec/json/traps.json
+SPEC_SMOKE_CAPFLAGS = -DWASM_MAX_FUNCTIONS=512 -DWASM_MAX_TABLE_SIZE=1024
+
+asan:
+	$(MAKE) san-run NAME=asan SAN_CC=$(SAN_CC) SAN_FLAGS="$(ASAN_FLAGS)"
+
+ubsan:
+	$(MAKE) san-run NAME=ubsan SAN_CC=$(SAN_CC) SAN_FLAGS="$(UBSAN_FLAGS)"
+
+sanitizers:
+	$(MAKE) san-run NAME=sanitizers SAN_CC=$(SAN_CC) SAN_FLAGS="$(SAN_FLAGS)"
+
+# Historical alias kept for existing CI invocations.
+sanitize: sanitizers
+
+# One sanitizer configuration end to end: build every source and test
+# binary with the sanitizer flags into $(BUILD)/$(NAME), run the full
+# test suite, then run the spec smoke suites through a sanitized runner.
+san-run:
+	@echo "[san] $(NAME): $(SAN_CC) $(SAN_FLAGS)"
+	$(MAKE) BUILD=$(BUILD)/$(NAME) CC=$(SAN_CC) \
+	        CFLAGS="$(SAN_CFLAGS) $(SAN_FLAGS)" all
+	$(MAKE) BUILD=$(BUILD)/$(NAME) CC=$(SAN_CC) \
+	        CFLAGS="$(SAN_CFLAGS) $(SAN_FLAGS)" test
+	$(MAKE) BUILD=$(BUILD)/$(NAME) CC=$(SAN_CC) \
+	        SPEC_CFLAGS="$(SAN_CFLAGS) $(SAN_FLAGS) $(SPEC_SMOKE_CAPFLAGS)" \
+	        $(BUILD)/$(NAME)/wasm_runner_spec$(EXE)
+	$(PYTHON) tools/run_spec_suite.py --runner $(BUILD)/$(NAME)/wasm_runner_spec$(EXE) $(SPEC_SMOKE)
 
 runner: $(RUNNER)
 	./$(RUNNER)
 
+ifeq ($(OS),Windows_NT)
+clean:
+	rmdir /s /q $(BUILD) 2>nul || ver > nul
+else
 clean:
 	rm -rf $(BUILD)
+endif
 
-.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 testcli runner fuzz parity spec size-report arm-cross sanitize clean
+.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 testcli runner fuzz parity spec size-report arm-cross asan ubsan sanitizers san-run sanitize clean
