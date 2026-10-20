@@ -11,4 +11,9 @@ idf_component_register(
         "${CMAKE_CURRENT_LIST_DIR}/../../src/wasm_validate.c"
     INCLUDE_DIRS
         "${CMAKE_CURRENT_LIST_DIR}/../../include"
+    COMPILE_DEFINITIONS
+        # Embedded overrides: the ESP32 build never links the desktop CLI,
+        # but the file budget stays explicit for every target.
+        RUNNER_FILE_MAX=4096u
+        STM32F4_VM_BUDGET_BYTES=114688u
 )

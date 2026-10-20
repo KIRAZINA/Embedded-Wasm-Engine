@@ -20,14 +20,8 @@
 #include "leb128.h"
 #include "wasm_parser.h"
 #include "wasm_types.h"
+#include "harness.h"
 
-static int g_pass = 0;
-static int g_fail = 0;
-
-#define CHECK(cond, name) do { \
-    if (cond) { printf("  [PASS] %s\n", (name)); g_pass++; } \
-    else { printf("  [FAIL] %s (line %d)\n", (name), __LINE__); g_fail++; } \
-} while (0)
 
 /* ---------- LEB128 unit tests ---------- */
 
@@ -367,24 +361,19 @@ static void test_struct_sizes(void)
 
 int main(void)
 {
+    static const harness_test_t tests[] = {
+        { "leb_u32_valid", test_leb_u32_valid },
+        { "leb_truncated", test_leb_truncated },
+        { "leb_overflow", test_leb_overflow },
+        { "leb_signed_vectors", test_leb_signed_vectors },
+        { "valid_dummy_header", test_valid_dummy_header },
+        { "corrupt_magic", test_corrupt_magic },
+        { "bad_version_and_short", test_bad_version_and_short },
+        { "section_payload_oob", test_section_payload_oob },
+        { "section_header_edge_cases", test_section_header_edge_cases },
+        { "struct_sizes", test_struct_sizes },
+    };
     printf("=== Phase 1 tests: LEB128 + header parser ===\n");
-    test_leb_u32_valid();
-    test_leb_truncated();
-    test_leb_overflow();
-    test_leb_signed_vectors();
-    test_valid_dummy_header();
-    test_corrupt_magic();
-    test_bad_version_and_short();
-    test_section_payload_oob();
-    test_section_header_edge_cases();
-    test_struct_sizes();
-
-    printf("--------------------------------------------\n");
-    printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
-    if (g_fail != 0) {
-        printf("STATUS: FAIL\n");
-        return 1;
-    }
-    printf("STATUS: ALL TESTS PASSED\n");
-    return 0;
+    return harness_run("phase1", tests,
+                       sizeof(tests) / sizeof(tests[0]));
 }

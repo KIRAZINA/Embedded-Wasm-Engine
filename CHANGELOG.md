@@ -75,14 +75,35 @@ entry groups their externally visible milestones for readers of the changelog.
 
 ## Phase history
 
-- **Phase 0:** established the C11 zero-allocation project baseline.
-- **Phase 1:** added LEB128 decoding, header parsing, and section traversal.
-- **Phase 2:** added operand stacks, linear memory, and memory bounds checks.
-- **Phase 3:** added frames, calls, locals, and execution state.
-- **Phase 4:** added i32 operations, comparisons, shifts, and traps.
-- **Phase 5:** added structured blocks, loops, branches, and factorial execution.
-- **Phase 6:** added host callbacks, exports, imports, and CLI execution.
-- **Phase 7:** added f32/f64 operations, conversions, and reinterpretation.
-- **Phase 8:** added `select`, `br_table`, and dispatch coverage.
-- **Release work:** added globals/data/start, tables/indirect calls, validation,
-  fuzz/conformance tooling, CI, embedded targets, and release packaging.
+The project was delivered in explicit phases; each phase below names the
+commit series and its externally visible result.
+
+- **Phase 0 — baseline:** the C11 zero-allocation project baseline, the
+  invariant list (no dynamic allocation, fixed capacity, `make test`
+  green) and the first audit of the engine's structure.
+- **Phase 1 — spec suite compliance:** the official WebAssembly spec
+  corpus became the measuring instrument (`tools/fetch_spec_tests.sh`,
+  `tools/run_spec_suite.py`), float arithmetic was corrected (NaN
+  canonicalization, `sqrtf`), and trap messages were mapped to the spec
+  wording.
+- **Phase 2 — fuzzing and robustness:** the fuzzing infrastructure
+  (`fuzz/`, libFuzzer/AFL++/deterministic backends), the sanitizer
+  targets (`make asan`, `make ubsan`, `make sanitizers`), the control
+  nesting limit (`WASM_MAX_CTRL_NESTING`, 1024) and the branch-scan
+  budget (`WASM_SCAN_BYTES_PER_STEP`).
+- **Phase 3 — real-world modules, CI and documentation:** real clang
+  `--target=wasm32` output as the readiness proof (`realworld/`), the
+  CI rewrite with a build matrix plus spec and size gates, the shared
+  test harness (`tests/harness.h`) and the documentation truth pass
+  (`docs/SPEC_STATUS.md`, `docs/LIMITS.md`).
+- **Earlier work (phases 0–7 of the original plan):** LEB128 decoding,
+  header parsing, section traversal, operand stacks, linear memory,
+  frames, calls, locals, the i32 instruction set, structured control
+  flow, host callbacks, exports/imports, the CLI, the f32/f64
+  instruction set, `select`, `br_table`, globals/data/start, tables and
+  indirect calls, validation, conformance tooling, CI, embedded targets
+  and release packaging.
+
+The intermediate commits are preserved in the git history; the release
+entries below group their externally visible milestones for readers of
+the changelog.

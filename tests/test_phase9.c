@@ -26,14 +26,8 @@
 #include "wasm_memory.h"
 #include "wasm_parser.h"
 #include "wasm_vm.h"
+#include "harness.h"
 
-static int g_pass = 0;
-static int g_fail = 0;
-
-#define CHECK(cond, name) do { \
-    if (cond) { printf("  [PASS] %s\n", (name)); g_pass++; } \
-    else { printf("  [FAIL] %s (line %d)\n", (name), __LINE__); g_fail++; } \
-} while (0)
 
 static wasm_vm_t g_vm;
 static wasm_host_registry_t g_reg;
@@ -869,31 +863,27 @@ static void test_cli_hello(void)
 
 int main(void)
 {
+    static const harness_test_t tests[] = {
+        { "global_get", test_global_get },
+        { "global_set", test_global_set },
+        { "global_traps", test_global_traps },
+        { "init_forms", test_init_forms },
+        { "global_cap", test_global_cap },
+        { "import_global", test_import_global },
+        { "import_mutable_set", test_import_mutable_set },
+        { "init_from_import", test_init_from_import },
+        { "data_basic", test_data_basic },
+        { "data_bounds", test_data_bounds },
+        { "data_caps_misc", test_data_caps_misc },
+        { "data_global_offset", test_data_global_offset },
+        { "start_runs_once", test_start_runs_once },
+        { "start_rejects", test_start_rejects },
+        { "host_start", test_host_start },
+        { "start_locals_data_order", test_start_locals_data_order },
+        { "register_global_api", test_register_global_api },
+        { "cli_hello", test_cli_hello },
+    };
     printf("=== Phase 9 tests: globals, data, start ===\n");
-    test_global_get();
-    test_global_set();
-    test_global_traps();
-    test_init_forms();
-    test_global_cap();
-    test_import_global();
-    test_import_mutable_set();
-    test_init_from_import();
-    test_data_basic();
-    test_data_bounds();
-    test_data_caps_misc();
-    test_data_global_offset();
-    test_start_runs_once();
-    test_start_rejects();
-    test_host_start();
-    test_start_locals_data_order();
-    test_register_global_api();
-    test_cli_hello();
-    printf("--------------------------------------------\n");
-    printf("RESULT: %d passed, %d failed\n", g_pass, g_fail);
-    if (g_fail != 0) {
-        printf("STATUS: FAIL\n");
-        return 1;
-    }
-    printf("STATUS: ALL TESTS PASSED\n");
-    return 0;
+    return harness_run("phase9", tests,
+                       sizeof(tests) / sizeof(tests[0]));
 }

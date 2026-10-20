@@ -48,6 +48,7 @@ T10       = $(BUILD)/test_phase10
 T11       = $(BUILD)/test_phase11
 T12       = $(BUILD)/test_phase12
 T13       = $(BUILD)/test_phase13
+T14       = $(BUILD)/test_phase14
 TCLI      = $(BUILD)/test_cli
 FUZZ      = $(BUILD)/fuzz_smoke
 SEED      ?= 1
@@ -57,9 +58,21 @@ ARM_AR    ?= arm-none-eabi-ar
 ARM_BUILD = $(BUILD)/arm
 ARM_OBJECTS = $(patsubst src/%.c,$(ARM_BUILD)/%.o,$(SRC))
 ARM_CFLAGS = -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude \
-             -mcpu=cortex-m4 -mthumb -Os -ffreestanding -ffunction-sections -fdata-sections
+             -mcpu=cortex-m4 -mthumb -Os -ffreestanding -ffunction-sections -fdata-sections \
+             -DRUNNER_FILE_MAX=4096u -DSTM32F4_VM_BUDGET_BYTES=114688u
 
-all: $(RUNNER) $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(T8) $(T9) $(T10) $(T11) $(T12) $(T13) $(TCLI)
+# Embedded configuration check: build the Cortex-M demo with the embedded
+# flags using the host compiler, so the embedded overrides stay verified
+# even when arm-none-eabi-gcc is not installed.
+embedded-check:
+	$(MKDIR_P)
+	$(CC) -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude -Os -ffreestanding \
+	    -DRUNNER_FILE_MAX=4096u -DSTM32F4_VM_BUDGET_BYTES=114688u \
+	    $(SRC) targets/stm32/embedded_demo.c targets/stm32/demo_add_wasm.c \
+	    -o $(BUILD)/embedded_demo_host -lm
+	@echo "[embedded-check] OK (host build of the Cortex-M configuration)"
+
+all: $(RUNNER) $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(T8) $(T9) $(T10) $(T11) $(T12) $(T13) $(T14) $(TCLI)
 
 $(RUNNER): $(SRC) src/main.c include/version.h
 	$(MKDIR_P)
@@ -121,16 +134,20 @@ $(T13): $(SRC) tests/test_phase13.c
 	$(MKDIR_P)
 	$(CC) $(CFLAGS) $(SRC) tests/test_phase13.c -o $(T13) $(LDLIBS)
 
+$(T14): $(SRC) tests/test_phase14.c
+	$(MKDIR_P)
+	$(CC) $(CFLAGS) $(SRC) tests/test_phase14.c -o $(T14) $(LDLIBS)
+
 $(FUZZ): $(SRC) tests/fuzz_smoke.c
 	$(MKDIR_P)
 	$(CC) $(CFLAGS) $(SRC) tests/fuzz_smoke.c -o $(FUZZ) $(LDLIBS)
 
 test: all
 ifeq ($(OS),Windows_NT)
-	powershell -NoProfile -Command "$$pass=0; $$fail=0; $$tests=@('$(BUILD)/test_phase1.exe','$(BUILD)/test_phase2.exe','$(BUILD)/test_phase3.exe','$(BUILD)/test_phase4.exe','$(BUILD)/test_phase5.exe','$(BUILD)/test_phase6.exe','$(BUILD)/test_phase7.exe','$(BUILD)/test_phase8.exe','$(BUILD)/test_phase9.exe','$(BUILD)/test_phase10.exe','$(BUILD)/test_phase11.exe','$(BUILD)/test_phase12.exe','$(BUILD)/test_phase13.exe','$(BUILD)/test_cli.exe'); foreach ($$t in $$tests) { $$o=& $$t; $$o | Select-Object -Last 3; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }; $$m=$$o | Select-String 'RESULT: ([0-9]+) passed, ([0-9]+) failed'; if ($$m) { $$pass += [int]$$m.Matches[0].Groups[1].Value; $$fail += [int]$$m.Matches[0].Groups[2].Value } }; Write-Output ('TOTAL: {0} passed, {1} failed' -f $$pass,$$fail); if ($$fail -ne 0) { exit 1 }"
+	powershell -NoProfile -Command "$$pass=0; $$fail=0; $$tests=@('$(BUILD)/test_phase1.exe','$(BUILD)/test_phase2.exe','$(BUILD)/test_phase3.exe','$(BUILD)/test_phase4.exe','$(BUILD)/test_phase5.exe','$(BUILD)/test_phase6.exe','$(BUILD)/test_phase7.exe','$(BUILD)/test_phase8.exe','$(BUILD)/test_phase9.exe','$(BUILD)/test_phase10.exe','$(BUILD)/test_phase11.exe','$(BUILD)/test_phase12.exe','$(BUILD)/test_phase13.exe','$(BUILD)/test_phase14.exe','$(BUILD)/test_cli.exe'); foreach ($$t in $$tests) { $$o=& $$t; $$o | Select-Object -Last 3; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }; $$m=$$o | Select-String 'RESULT: ([0-9]+) passed, ([0-9]+) failed'; if ($$m) { $$pass += [int]$$m.Matches[0].Groups[1].Value; $$fail += [int]$$m.Matches[0].Groups[2].Value } }; Write-Output ('TOTAL: {0} passed, {1} failed' -f $$pass,$$fail); if ($$fail -ne 0) { exit 1 }"
 else
 	@pass=0; fail=0; \
-	for t in $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(T8) $(T9) $(T10) $(T11) $(T12) $(T13) $(TCLI); do \
+	for t in $(T1) $(T2) $(T3) $(T4) $(T5) $(T6) $(T7) $(T8) $(T9) $(T10) $(T11) $(T12) $(T13) $(T14) $(TCLI); do \
 	  echo "== $$t =="; \
 	  out=`./$$t`; ec=$$?; \
 	  echo "$$out" | tail -n 3; \
@@ -182,6 +199,9 @@ test12: $(T12)
 test13: $(T13)
 	./$(T13)
 
+test14: $(T14)
+	./$(T14)
+
 testcli: $(TCLI)
 	./$(TCLI)
 
@@ -197,6 +217,17 @@ $(SPEC_RUNNER_BIN): $(SRC) src/main.c include/version.h
 
 spec: $(SPEC_RUNNER_BIN)
 	$(PYTHON) tools/run_spec_suite.py --runner $(SPEC_RUNNER_BIN) tests/spec/json/*.json
+
+# Run the spec suite, keep the summary and check it against the numeric
+# baseline in tests/spec/DEVIATIONS.md. The suite itself still has
+# documented failures, so the job fails only on a regression.
+spec-summary: $(SPEC_RUNNER_BIN)
+	-$(PYTHON) tools/run_spec_suite.py --runner $(SPEC_RUNNER_BIN) tests/spec/json/*.json | tee $(BUILD)/spec_summary.txt
+	$(PYTHON) tools/check_spec_baseline.py --summary $(BUILD)/spec_summary.txt
+
+# Engine footprint against the committed baseline (5 % tolerance).
+size-check:
+	$(PYTHON) tools/check_size_baseline.py
 
 size-report: tools/size_report.c
 	$(MKDIR_P)
@@ -300,9 +331,25 @@ fuzz-mutate: fuzz-build
 	$(PYTHON) fuzz/mutate.py --out $(FUZZ_CORPUS) --rounds $(MUT_ROUNDS) \
 	    --runner $(FUZZ_BUILD)/parse_harness
 
+# ---- Phase 5: real-world modules -----------------------------------------
+# The readiness proof: real clang output, built natively and as
+# WebAssembly, compared byte for byte. Needs clang with the wasm32
+# target and wasm-ld (see tools/setup_wasm_toolchain.sh).
+realworld: all
+	sh realworld/build_realworld.sh $(BUILD)/realworld
+
+# Verify the committed real-world modules with the engine only (no wasm
+# toolchain needed): this is what CI can run everywhere.
+realworld-verify: all $(T14)
+	./$(T14)
+
+.PHONY: realworld realworld-verify
+
 # Hard invariant 1: no dynamic allocation anywhere in the tree.
 no-alloc-check:
 	sh tools/check_no_alloc.sh
+
+.PHONY: no-alloc-check
 
 .PHONY: fuzz-build fuzz-corpus fuzz-libfuzzer fuzz-afl fuzz-loop fuzz fuzz-mutate no-alloc-check
 
@@ -362,4 +409,4 @@ clean:
 	rm -rf $(BUILD)
 endif
 
-.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 test13 testcli runner fuzz parity spec size-report arm-cross asan ubsan sanitizers san-run sanitize clean
+.PHONY: all test test1 test2 test3 test4 test5 test6 test7 test8 test9 test10 test11 test12 test13 test14 testcli runner fuzz parity spec spec-summary size-check size-report arm-cross embedded-check asan ubsan sanitizers san-run sanitize clean

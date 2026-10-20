@@ -10,9 +10,13 @@
 set -u
 
 DIRS="src include tests fuzz tools targets"
-PAT='\b(malloc|calloc|realloc|alloca|strdup|free)[[:space:]]*\('
+# The allocation APIs as *calls*: the name must be preceded by a
+# character that cannot be part of an identifier (so "dependency-free("
+# in a comment does not count) and be followed by an opening parenthesis.
+PAT='(^|[^A-Za-z0-9_.-])(malloc|calloc|realloc|alloca|strdup|free)[[:space:]]*\('
 
-hits=$(grep -rnE "$PAT" $DIRS --include='*.c' --include='*.h' 2>/dev/null)
+hits=$(grep -rnE '(^|[^A-Za-z0-9_.-])(malloc|calloc|realloc|alloca|strdup|free)[[:space:]]*\(' \
+        $DIRS --include='*.c' --include='*.h' 2>/dev/null)
 if [ -n "$hits" ]; then
     echo "FAIL: dynamic allocation call(s) found:"
     echo "$hits"

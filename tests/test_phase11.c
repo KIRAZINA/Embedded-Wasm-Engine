@@ -5,13 +5,8 @@
 
 #include "wasm_parser.h"
 #include "wasm_validate.h"
+#include "harness.h"
 
-static unsigned g_pass;
-static unsigned g_fail;
-
-#define CHECK(c, n) do { \
-    if (c) { g_pass++; } else { printf("FAIL: %s\n", (n)); g_fail++; } \
-} while (0)
 
 /* One type () -> (), one defined function, and one code body. */
 static size_t module_with_body(uint8_t *m, const uint8_t *body, size_t body_len)
@@ -636,7 +631,9 @@ static void test_corpus(void)
 
 int main(void)
 {
-    test_corpus();
-    printf("RESULT: %u passed, %u failed\n", g_pass, g_fail);
-    return g_fail == 0u ? 0 : 1;
+    static const harness_test_t tests[] = {
+        { "corpus", test_corpus },
+    };
+    return harness_run("phase11", tests,
+                       sizeof(tests) / sizeof(tests[0]));
 }

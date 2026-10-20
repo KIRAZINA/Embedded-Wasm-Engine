@@ -1,0 +1,19 @@
+# size_baseline.txt — reference footprint of the engine library.
+#
+# Measured with tools/size_measure.sh: the engine sources compiled with
+# -Os -ffreestanding (typical embedded configuration), summed over the
+# object files. The engine itself has no static data (.data/.bss = 0);
+# the static storage of the CLI, the arenas and the VM instances is
+# application-level and reported by `make size-report`.
+#
+# tools/check_size_baseline.py fails when .text or .bss grew by more
+# than 5 %. The numbers depend on the compiler version, so regenerate
+# them when the toolchain changes:
+#
+#   sh tools/size_measure.sh > size_baseline.txt
+#
+# Reference toolchain: gcc 13.3 (x86_64-linux-gnu), -Os -ffreestanding.
+text=49010
+bss=0
+data=0
+total=49010

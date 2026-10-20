@@ -2,3 +2,9 @@
 # endings; keep it that way in the working tree so regenerating it does
 # not leave the tree dirty on Windows (core.autocrlf=true).
 docs/OPCODE_MATRIX.md text eol=lf
+
+# Shell and Python scripts are interpreted: they must keep LF endings,
+# otherwise the POSIX shell rejects the CR in "set -u\r" when the tree
+# is checked out on Windows (core.autocrlf=true).
+*.sh text eol=lf
+*.py text eol=lf

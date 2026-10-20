@@ -30,8 +30,12 @@
 #include "wasm_validate.h"
 #include "wasm_vm.h"
 
+/* Desktop CLI input-file cap. 1 MiB is enough for real compiler output
+ * (clang -O2 modules are a few KiB); embedded builds do not link this
+ * file at all, and the ones that do override the value explicitly
+ * (see targets/ and the arm-cross target in the Makefile). */
 #ifndef RUNNER_FILE_MAX
-#define RUNNER_FILE_MAX (64u * 1024u) /* maximum CLI input file in bytes */
+#define RUNNER_FILE_MAX (1024u * 1024u) /* maximum CLI input file in bytes */
 #endif
 #ifndef RUNNER_ARENA_PAGES
 #define RUNNER_ARENA_PAGES 1u /* pages reserved by the CLI memory arena */
